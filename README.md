@@ -37,6 +37,13 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 - Lê e grava `~/.config/llama.cpp/config.ini` (escrita atômica + backup `.bak`).
 - **Aplicar só grava o arquivo** — o site nunca reinicia o llama-server sozinho. Como o config é lido no startup, **a mudança só vale depois que você reiniciar o llama-server manualmente**.
 
+**MCP (aba "outros" → config de mcp)**
+
+- Tela com a lista dos servidores: nome/comando editáveis na hora, ativar/desativar, remover, **+ adicionar**, e editor direto do `~/.config/duway/mcp.json` (escrita atômica + backup `.bak`).
+- **Aplicar grava o arquivo e já mata/sobe os processos na hora** — diferente do config do llama, aqui não espera reinício nenhum.
+- Tudo contido na pasta do projeto: `.venv/`, `cache/` (uv, pip, playwright, chromedriver) e `TMPDIR` — nada é instalado no sistema.
+- JSON-RPC por stdio; rotas `GET|POST /api/mcp`, `GET /api/tools` e `POST /api/tool` prontas pro chat usar (o loop de tool_calls fica por sua conta / do modelo).
+
 **Visual**
 
 - Preto por padrão; ◐ inverte o tema (salvo + deep links `#dark` / `#light` / `#config`).
@@ -47,10 +54,11 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 | arquivo        | papel                                                        |
 | -------------- | ------------------------------------------------------------ |
 | `index.html`   | interface inteira (JS vanilla, IndexedDB, tema, menu, histórico) |
-| `server.py`    | backend stdlib: estático + `GET /api/flags` + `GET\|POST /api/config` |
+| `server.py`    | backend stdlib: estático + `GET /api/flags` + `GET\|POST /api/config` + 4 rotas MCP (processos filhos) |
 | `history.png`  | origem do ícone de histórico (vira data-URI)                  |
 
 ## Notas
 
 - O `config.ini` é lido pelo llama-server **só no startup** (precedência: `config.ini` < env < CLI).
+- MCP é isolado na **instalação** (venv e cache do projeto), não na **ação**: um servidor MCP roda com seus privilégios — só adicione o que você confiar.
 - Porta do site (`server.py`) e porta do llama são coisas diferentes: a do site é a do navegador, a do llama vem do config/menu.

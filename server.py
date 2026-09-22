@@ -20,11 +20,16 @@ uso:
   python3 server.py --dump-flags   # só imprime o JSON das flags (debug)
 """
 
+import atexit
 import json
 import os
+import queue
 import re
 import shutil
+import signal
+import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -438,6 +443,332 @@ def write_config(text, known_keys, destino):
 
 # ---------------------------------------------------------------- http
 
+# ------------------------------------------------------------------- mcp
+# servidores MCP = processos filhos do server.py, falando json-rpc por stdio.
+# tudo que eles baixam fica DENTRO da pasta do projeto (nada no ~):
+#   cache/uv  cache/pip  cache/pw  cache/tmp  cache/wdm  .venv
+
+MCP_PATH = Path(
+    os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")
+) / "duway" / "mcp.json"
+VENV_DIR = ROOT / ".venv"
+CACHE_DIR = ROOT / "cache"
+
+MCPS = {}          # nome -> registro {spec, proc, status, erro, tools, ...}
+MCPS_LOCK = threading.Lock()
+
+
+def _mcp_env(extra=None):
+    env = dict(os.environ)
+    for d in ("uv", "pip", "pw", "tmp", "wdm"):
+        (CACHE_DIR / d).mkdir(parents=True, exist_ok=True)
+    env["UV_CACHE_DIR"] = str(CACHE_DIR / "uv")
+    env["PIP_CACHE_DIR"] = str(CACHE_DIR / "pip")
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(CACHE_DIR / "pw")
+    env["TMPDIR"] = str(CACHE_DIR / "tmp")
+    env["WDM_CACHE"] = str(CACHE_DIR / "wdm")
+    env["WDM_LOCAL"] = "1"
+    lb = str(HOME / ".local" / "bin")
+    if lb not in env.get("PATH", "").split(":"):
+        env["PATH"] = lb + ":" + env.get("PATH", "")
+    for k, v in (extra or {}).items():
+        env[str(k)] = str(v)
+    return env
+
+
+def _mcp_validar(text):
+    """devolve (servers, erro) — valida a forma do mcp.json"""
+    try:
+        doc = json.loads(text or "{}")
+    except Exception as e:  # noqa: BLE001
+        return None, "json invalido: %s" % e
+    if not isinstance(doc, dict) or not isinstance(doc.get("servers"), list):
+        return None, 'esperado um objeto {"servers": [...]}'
+    vistos = set()
+    for i, s in enumerate(doc["servers"]):
+        if not isinstance(s, dict):
+            return None, "servers[%d] nao e objeto" % i
+        nome, cmd = s.get("nome"), s.get("cmd")
+        if not isinstance(nome, str) or not nome.strip():
+            return None, "servers[%d]: nome vazio" % i
+        if nome in vistos:
+            return None, "nome repetido: %s" % nome
+        vistos.add(nome)
+        if not isinstance(cmd, str) or not cmd.strip():
+            return None, "%s: cmd vazio" % nome
+        if not isinstance(s.get("args", []), list) or any(
+            not isinstance(a, str) for a in s.get("args", [])
+        ):
+            return None, "%s: args precisa ser lista de texto" % nome
+        if not isinstance(s.get("env", {}), dict) or any(
+            not isinstance(k, str) or not isinstance(v, str)
+            for k, v in s.get("env", {}).items()
+        ):
+            return None, "%s: env precisa ser texto=texto" % nome
+        if not isinstance(s.get("ativo", True), bool):
+            return None, "%s: ativo precisa ser true/false" % nome
+        if not isinstance(s.get("instalar", []), list) or any(
+            not isinstance(p, str) for p in s.get("instalar", [])
+        ):
+            return None, "%s: instalar precisa ser lista de texto" % nome
+    return doc["servers"], None
+
+
+def _mcp_gravar(text):
+    MCP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    bak = Path(str(MCP_PATH) + ".bak")
+    if MCP_PATH.exists():
+        shutil.copy2(MCP_PATH, bak)
+    tmp = Path(str(MCP_PATH) + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, MCP_PATH)
+    return bak
+
+
+def _mcp_novo(spec):
+    return {
+        "spec": spec, "proc": None, "status": "parado", "erro": "",
+        "tools": [], "seq": 0, "pend": {}, "stderr": [],
+        "lock": threading.Lock(),
+    }
+
+
+def _mcp_chamar(m, metodo, params, timeout=60):
+    """json-rpc por stdio: escreve a requisicao, espera a resposta com o id"""
+    with m["lock"]:
+        if not m["proc"] or m["proc"].poll() is not None:
+            raise RuntimeError("processo nao esta rodando")
+        m["seq"] += 1
+        rid = m["seq"]
+        fila = queue.Queue()
+        m["pend"][rid] = fila
+        msg = json.dumps({"jsonrpc": "2.0", "id": rid,
+                          "method": metodo, "params": params}) + "\n"
+        try:
+            m["proc"].stdin.write(msg)
+            m["proc"].stdin.flush()
+        except Exception as e:  # noqa: BLE001
+            m["pend"].pop(rid, None)
+            raise RuntimeError("sem stdin: %s" % e)
+        try:
+            resp = fila.get(timeout=timeout)
+        except queue.Empty:
+            m["pend"].pop(rid, None)
+            raise TimeoutError("%s nao respondeu em %ds" % (metodo, timeout))
+        if resp is None:
+            raise RuntimeError("processo morreu durante %s%s" % (
+                metodo,
+                (" — " + " | ".join(m["stderr"][-3:])) if m["stderr"] else "",
+            ))
+        if "error" in resp:
+            raise RuntimeError(str(resp["error"]))
+        return resp.get("result")
+
+
+def _mcp_stdout(m):
+    for line in m["proc"].stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(msg, dict):
+            continue
+        rid = msg.get("id")
+        fila = m["pend"].pop(rid, None) if rid is not None else None
+        if fila is not None:
+            fila.put(msg)
+    # EOF: processo acabou — acorda quem estava esperando
+    for fila in m["pend"].values():
+        fila.put(None)
+    m["pend"].clear()
+    if m["proc"] is not None:  # morreu sozinho (nao fui eu que matei)
+        m["status"] = "erro"
+        m["erro"] = m["erro"] or "processo morreu"
+
+
+def _mcp_stderr(m):
+    for line in m["proc"].stderr:
+        line = line.rstrip()
+        if line:
+            m["stderr"].append(line)
+            del m["stderr"][:-20]
+
+
+def _mcp_matar(m):
+    p = m.get("proc")
+    m["proc"] = None
+    for fila in m["pend"].values():
+        fila.put(None)
+    m["pend"].clear()
+    if p:
+        # grupo de processos (uvx -> python do mcp): mata tudo, nao só o pai
+        try:
+            pgid = os.getpgid(p.pid)
+        except Exception:  # noqa: BLE001
+            pgid = None
+        try:
+            p.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+        if pgid:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            p.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            if pgid:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                try:
+                    p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+    if not m["erro"]:
+        m["status"] = "parado"
+
+
+def _mcp_subir(m):
+    """sobe o processo + handshake (initialize/tools/list) — bloqueante,
+    chamado FORA do MCPS_LOCK pra nao travar o GET /api/mcp"""
+    spec = m["spec"]
+    if m["proc"]:
+        _mcp_matar(m)
+    m["status"] = "subindo"
+    m["erro"] = ""
+    try:
+        p = subprocess.Popen(
+            [spec["cmd"]] + list(spec.get("args", [])),
+            cwd=str(ROOT),
+            env=_mcp_env(spec.get("env")),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            start_new_session=True,   # grupo proprio: o killpg mata o uvx + filho
+        )
+    except Exception as e:  # noqa: BLE001
+        m["status"] = "erro"
+        m["erro"] = "nao subiu: %s" % e
+        return
+    m["proc"] = p
+    threading.Thread(target=_mcp_stdout, args=(m,), daemon=True).start()
+    threading.Thread(target=_mcp_stderr, args=(m,), daemon=True).start()
+    try:
+        _mcp_chamar(m, "initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "duway", "version": "1"},
+        }, timeout=120)   # 1a vez: o uvx baixa o pacote nesse meio-tempo
+        p.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        p.stdin.flush()
+        res = _mcp_chamar(m, "tools/list", {}, timeout=30)
+        m["tools"] = (res or {}).get("tools", []) if isinstance(res, dict) else []
+        m["status"] = "rodando"
+    except Exception as e:  # noqa: BLE001
+        m["erro"] = str(e)
+        _mcp_matar(m)
+        m["status"] = "erro"
+
+
+def _mcp_aplicar(servers):
+    """sincroniza MCPS com a lista nova do arquivo; devolve status por nome"""
+    subir = []
+    with MCPS_LOCK:
+        alvo = {s["nome"]: s for s in servers}
+        for nome in list(MCPS.keys()):     # saiu / desligou / mudou
+            m = MCPS[nome]
+            s = alvo.get(nome)
+            mudou = (
+                s is None or not s.get("ativo", True)
+                or s.get("cmd") != m["spec"].get("cmd")
+                or list(s.get("args", [])) != list(m["spec"].get("args", []))
+                or (s.get("env") or {}) != (m["spec"].get("env") or {})
+            )
+            if mudou:
+                _mcp_matar(m)
+                if s is None:
+                    MCPS.pop(nome, None)
+                else:
+                    m["spec"] = s
+                    m["tools"] = []
+                    m["erro"] = ""
+        for nome, s in alvo.items():       # entrou / atualizou spec
+            if nome not in MCPS:
+                MCPS[nome] = _mcp_novo(s)
+            else:
+                MCPS[nome]["spec"] = s
+        for nome, s in alvo.items():       # sobe os ativos
+            if not s.get("ativo", True):
+                continue
+            m = MCPS[nome]
+            if m["proc"] is None or m["status"] == "erro":
+                subir.append(m)
+    for m in subir:
+        _mcp_subir(m)
+    return _mcp_status(servers)
+
+
+def _mcp_status(servers=None):
+    out = []
+    with MCPS_LOCK:
+        if servers is None:
+            servers = [m["spec"] for m in MCPS.values()]
+        for s in servers:
+            m = MCPS.get(s.get("nome", ""), {})
+            out.append({
+                "nome": s.get("nome", ""),
+                "cmd": s.get("cmd", ""),
+                "args": s.get("args", []),
+                "env": s.get("env", {}),
+                "instalar": s.get("instalar", []),
+                "ativo": bool(s.get("ativo", True)),
+                "status": m.get("status", "parado"),
+                "erro": m.get("erro", ""),
+                "tools": [
+                    {"name": t.get("name", ""),
+                     "description": t.get("description", "")}
+                    for t in m.get("tools", [])
+                ],
+            })
+    return out
+
+
+def _mcp_boot():
+    try:
+        if not MCP_PATH.exists():
+            return
+        servers, erro = _mcp_validar(MCP_PATH.read_text(encoding="utf-8"))
+        if erro:
+            print("mcp   ->  %s" % erro)
+            return
+        if not servers:
+            return
+        if not VENV_DIR.exists():
+            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)],
+                           check=True, timeout=120, env=_mcp_env())
+        print("mcp   ->  %d servidor(es), %d ativo(s)" % (
+            len(servers), len([s for s in servers if s.get("ativo", True)])))
+        _mcp_aplicar(servers)
+    except Exception as e:  # noqa: BLE001
+        print("mcp   ->  erro: %s" % e)
+
+
+def _mcp_desligar_tudo():
+    with MCPS_LOCK:
+        for m in MCPS.values():
+            _mcp_matar(m)
+
+
+atexit.register(_mcp_desligar_tudo)
+
 _CACHE = {"flags": None, "binary": ""}
 
 
@@ -472,12 +803,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             qs = parse_qs(urlparse(self.path).query)
             return self.api_config_get(qs.get("path", [""])[0])
+        if path == "/api/mcp":
+            return self.api_mcp_get()
+        if path == "/api/tools":
+            return self.api_tools_get()
         return self._json({"erro": "rota desconhecida"}, 404)
 
     def do_POST(self):  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path == "/api/config":
             return self.api_config_post()
+        if path == "/api/mcp":
+            return self.api_mcp_post()
+        if path == "/api/tool":
+            return self.api_tool_post()
         return self._json({"erro": "rota desconhecida"}, 404)
 
     # -- apis -------------------------------------------------------------
@@ -606,6 +945,119 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
+    # -- mcp ---------------------------------------------------------------
+    def api_mcp_get(self):
+        if not MCP_PATH.exists():
+            return self._json({"path": str(MCP_PATH), "existe": False,
+                               "servers": []})
+        try:
+            text = MCP_PATH.read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "nao li o mcp.json: %s" % e}, 500)
+        servers, erro = _mcp_validar(text)
+        if erro:
+            return self._json({"erro": erro, "path": str(MCP_PATH)}, 400)
+        self._json({"path": str(MCP_PATH), "existe": True,
+                    "servers": _mcp_status(servers)})
+
+    def api_mcp_post(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            return self._json({"erro": "json invalido"}, 400)
+
+        text = payload.get("text", "")
+        if not isinstance(text, str):
+            return self._json({"erro": "text ausente"}, 400)
+        if not text.endswith("\n"):
+            text += "\n"
+
+        servers, erro = _mcp_validar(text)
+        if erro:
+            return self._json({"erro": "mcp.json invalido",
+                               "detalhes": [erro]}, 400)
+
+        # .venv do projeto: nasce so na 1a gravacao (nunca toca o sistema)
+        if not VENV_DIR.exists():
+            try:
+                VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    [sys.executable, "-m", "venv", str(VENV_DIR)],
+                    check=True, timeout=180, env=_mcp_env(),
+                )
+            except Exception as e:  # noqa: BLE001
+                return self._json({"erro": "nao criei o .venv: %s" % e}, 500)
+
+        # pacotes que o mcp pediu (campo instalar) — so pra dentro do .venv
+        for s in servers:
+            pkgs = s.get("instalar") or []
+            if not pkgs:
+                continue
+            uv = shutil.which("uv")
+            cmd = (([uv, "pip", "install", "-p", str(VENV_DIR)] if uv else
+                    [str(VENV_DIR / "bin" / "python"), "-m", "pip", "install"])
+                   + list(pkgs))
+            try:
+                subprocess.run(cmd, check=True, timeout=600, env=_mcp_env())
+            except Exception as e:  # noqa: BLE001
+                return self._json({
+                    "erro": "%s: falhou ao instalar %s (%s)"
+                            % (s["nome"], " ".join(pkgs), e)}, 500)
+
+        try:
+            bak = _mcp_gravar(text)
+            status = _mcp_aplicar(servers)
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "nao gravei: %s" % e}, 500)
+
+        self._json({"ok": True, "path": str(MCP_PATH), "backup": str(bak),
+                    "servers": status})
+
+    def api_tools_get(self):
+        """tools de todos os MCP ativos e rodando (pro chat usar)"""
+        out = []
+        with MCPS_LOCK:
+            for nome, m in MCPS.items():
+                if m["proc"] is not None and m["status"] == "rodando":
+                    out.append({"servidor": nome, "ativo": True,
+                                "tools": m["tools"]})
+        self._json({"servidores": out})
+
+    def api_tool_post(self):
+        """executa uma tool: {servidor, name, arguments} -> content do MCP"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            return self._json({"erro": "json invalido"}, 400)
+
+        nome = payload.get("servidor", "")
+        name = payload.get("name", "")
+        if not isinstance(nome, str) or not isinstance(name, str) or not name:
+            return self._json({"erro": "servidor/name ausentes"}, 400)
+
+        with MCPS_LOCK:
+            m = MCPS.get(nome)
+            if m is None:
+                return self._json({"erro": "servidor desconhecido: %s" % nome},
+                                  404)
+            ref = m
+        if ref["proc"] is None or ref["status"] != "rodando":
+            return self._json({"erro": "servidor nao esta rodando: %s" % nome},
+                              409)
+
+        try:
+            res = _mcp_chamar(ref, "tools/call", {
+                "name": name,
+                "arguments": payload.get("arguments") or {},
+            }, timeout=180)
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "falhou ao chamar %s: %s" % (name, e)},
+                              500)
+        self._json({"ok": True, "resultado": res})
+
+
 def main():
     args = sys.argv[1:]
     global LISTEN_PORT
@@ -635,6 +1087,8 @@ def main():
         print("flags  ->  %d carregadas" % len(flags))
     except Exception as e:  # noqa: BLE001
         print("flags  ->  erro: %s" % e)
+
+    threading.Thread(target=_mcp_boot, daemon=True).start()  # sobe os ativos
 
     try:
         srv = ThreadingHTTPServer(("127.0.0.1", LISTEN_PORT), Handler)

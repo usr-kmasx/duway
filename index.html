@@ -136,6 +136,38 @@
   #pensov .mhead .x{margin-left:auto}
   .pens{white-space:pre-wrap;word-break:break-word;padding:14px 18px;
         font-size:13.5px;line-height:1.7}
+
+  /* ---------------- config de mcp ---------------- */
+  #mcpov{z-index:60}   /* fica por cima do menu, que abre por baixo */
+  #mcpov .modal{width:min(860px,100%);height:min(88vh,900px)}
+  #mcpov .mhead .x{margin-left:auto}
+  .mcppath{font-size:11px;opacity:var(--mut);max-width:46%;
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mbar .btn{height:30px}
+  .mrow{display:flex;align-items:center;gap:10px;border-bottom:var(--bd);
+        padding:9px 2px;flex-wrap:wrap}
+  .mrow .nm{font-weight:700;min-width:110px}
+  .mrow .cm{font-size:12px;opacity:.8;overflow:hidden;text-overflow:ellipsis;
+            white-space:nowrap;flex:1;min-width:140px}
+  .mrow .stt{font-size:11px;opacity:var(--mut);white-space:nowrap}
+  .mrow .stt .pt{display:inline-block;width:7px;height:7px;border-radius:50%;
+        background:currentColor;margin-right:6px;vertical-align:middle}
+  .mrow .stt.off .pt{opacity:.3}
+  .mrow input.f{background:var(--bg);color:var(--fg);border:var(--bd);
+        font:inherit;font-size:12px;padding:4px 7px;min-width:0}
+  .mrow input.f.nm{font-weight:700;width:130px;flex:none}
+  .mrow input.f.cm{flex:1;min-width:140px}
+  .mrow .ac{display:flex;gap:6px;align-items:center;margin-left:auto}
+  .mrow .mini{border:var(--bd);background:var(--bg);color:var(--fg);
+        cursor:pointer;font-size:11px;padding:4px 9px}
+  .mrow .mini:hover{background:var(--fg);color:var(--bg)}
+  .mcpraw{border-top:var(--bd);padding:8px 14px;flex:none}
+  .mcpraw .lbl{font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+        opacity:var(--mut);margin-bottom:6px}
+  .mcpraw textarea{width:100%;height:132px;box-sizing:border-box;
+        background:var(--bg);color:var(--fg);border:var(--bd);
+        font:12px/1.5 ui-monospace,Consolas,monospace;padding:8px 10px;
+        resize:vertical;white-space:pre}
   .mhead{
     border-bottom:var(--bd);padding:11px 14px;
     display:flex;align-items:center;gap:12px;
@@ -347,6 +379,32 @@
       <button class="x" id="pensclose" title="fechar">✕</button>
     </div>
     <div class="mbody"><div class="pens" id="penstxt"></div></div>
+  </div>
+</div>
+
+<div class="ov" id="mcpov">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="config de mcp">
+    <div class="mhead">
+      <h2>config de mcp</h2>
+      <span class="mcppath" id="mcppath"></span>
+      <button class="x" id="mcpclose" title="fechar">✕</button>
+    </div>
+    <div class="mbar">
+      <button class="btn" id="mcpadd" style="height:30px">+ adicionar</button>
+      <span class="cnt" id="mcpstat"></span>
+    </div>
+    <div class="mbody" id="mcpbody"></div>
+    <div class="mcpraw">
+      <div class="lbl">mcp.json — edite direto (o aplicar valida)</div>
+      <textarea id="mcpjson" spellcheck="false" autocomplete="off"
+                aria-label="conteudo do mcp.json"></textarea>
+    </div>
+    <div class="res" id="mcpres"></div>
+    <div class="mfoot">
+      <span class="note" id="mcpnote">mudanças só valem depois de <b>aplicar</b> — processos sobem/morrem na hora</span>
+      <button class="btn" id="mcpcancel" style="height:34px">fechar</button>
+      <button class="btn" id="mcpapply" style="height:34px;min-width:110px;font-weight:600">aplicar</button>
+    </div>
   </div>
 </div>
 
@@ -991,6 +1049,171 @@ pensov.addEventListener("click",function(e){ if(e.target===pensov) fechaPens(); 
 document.addEventListener("keydown",function(e){
   if(e.key==="Escape"&&pensov.classList.contains("open")) fechaPens();
 });
+
+/* ================= config de mcp ================= */
+var mcpov=$("#mcpov"), mcpbody=$("#mcpbody"), mcpjson=$("#mcpjson"),
+    mcpnote=$("#mcpnote"), mcpres=$("#mcpres"), mcpstat=$("#mcpstat"),
+    mcppath=$("#mcppath");
+var MCPJ={servers:[]};          /* fonte da lista; o texto do arquivo = mcpTexto() */
+
+function mcpLimpo(x){           /* só o que o arquivo aceita (sem status/tools) */
+  var o={nome:String(x.nome||""), cmd:String(x.cmd||""),
+         args:Array.isArray(x.args)?x.args.slice():[]};
+  if(x.env&&typeof x.env==="object"&&!Array.isArray(x.env)) o.env=x.env;
+  if(Array.isArray(x.instalar)&&x.instalar.length) o.instalar=x.instalar.slice();
+  o.ativo=x.ativo!==false;
+  return o;
+}
+function mcpTexto(){
+  return JSON.stringify({servers:(MCPJ.servers||[]).map(mcpLimpo)},null,2)+"\n";
+}
+function mcpParse(txt){         /* texto do editor -> MCPJ (mantendo status por nome) */
+  var obj=JSON.parse(txt);
+  if(!obj||typeof obj!=="object"||!Array.isArray(obj.servers))
+    throw new Error('esperado {"servers":[...]}');
+  var velho={};
+  (MCPJ.servers||[]).forEach(function(s){ velho[s.nome]=s; });
+  obj.servers.forEach(function(s){
+    var p=velho[s.nome];
+    if(p){ s.status=p.status; s.erro=p.erro; s.tools=p.tools; }
+  });
+  MCPJ=obj;
+}
+function mcpPinta(){            /* MCPJ -> lista (não mexe no textarea) */
+  var s=MCPJ.servers||[];
+  var at=s.filter(function(x){ return x.ativo!==false; }).length;
+  mcpstat.textContent=s.length+" mcp · "+at+" ativo"+(at===1?"":"s");
+  if(!s.length){
+    mcpbody.innerHTML='<div style="padding:14px 4px;opacity:.7;font-size:13px">'+
+      'nenhum servidor — clique em <b>+ adicionar</b> ou edite o JSON abaixo</div>';
+    return;
+  }
+  mcpbody.innerHTML=s.map(function(x,i){
+    var ativo=x.ativo!==false, st;
+    if(!ativo){
+      st='<span class="stt off"><span class="pt"></span>desativado</span>';
+    }else if(x.status==="rodando"){
+      var ts=(x.tools||[]).map(function(u){ return u.name; });
+      st='<span class="stt" title="'+esc(ts.join(", "))+'"><span class="pt"></span>'+
+         'rodando · '+ts.length+' tool'+(ts.length===1?"":"s")+'</span>';
+    }else if(x.status){
+      st='<span class="stt"><span class="pt"></span>'+esc(x.status)+
+         (x.erro?" — "+esc(String(x.erro).slice(0,80)):"")+'</span>';
+    }else{
+      st='<span class="stt"><span class="pt" style="opacity:.3"></span>não aplicado</span>';
+    }
+    return '<div class="mrow">'+
+      '<input class="f nm" data-f="nome" data-i="'+i+'" value="'+esc(x.nome||"")+
+        '" aria-label="nome do mcp">'+
+      '<input class="f cm" data-f="cmd" data-i="'+i+'" value="'+esc(x.cmd||"")+
+        '" placeholder="comando" aria-label="comando">'+
+      '<span class="cm">'+esc((x.args||[]).join(" "))+'</span>'+
+      '<span class="ac">'+st+
+        '<label class="mini" title="ativar/desativar">'+
+          '<input type="checkbox" data-tg="'+i+'" '+(ativo?"checked":"")+
+          ' style="vertical-align:middle" aria-label="ativo"></label>'+
+        '<button class="mini" data-rm="'+i+'" title="remover">✕</button>'+
+      '</span>'+
+    '</div>';
+  }).join("");
+}
+function mcpSync(){ mcpjson.value=mcpTexto(); mcpPinta(); }
+
+function fechaMcp(){ mcpov.classList.remove("open"); mcpres.className="res"; }
+async function abreMcp(){
+  mcpres.className="res";
+  mcpnote.textContent="lendo mcp.json…";
+  mcpov.classList.add("open");
+  try{
+    var r=await fetch("/api/mcp");
+    var j=await r.json();
+    mcppath.textContent=j.path||"";
+    if(!r.ok){
+      MCPJ={servers:[]}; mcpSync();
+      mcpnote.innerHTML="não li o arquivo: "+esc(j.erro||"?")+
+        " — edite/crie aqui e aplicar resolve";
+      return;
+    }
+    MCPJ={servers:j.servers||[]};
+    mcpSync();
+    mcpnote.innerHTML=j.existe
+      ? "mudanças só valem depois de <b>aplicar</b> — processos sobem/morrem na hora"
+      : "arquivo ainda não existe — monte aqui e <b>aplicar</b> cria";
+  }catch(e){ mcpnote.textContent="erro de rede: "+e; }
+}
+async function mcpAplicar(){
+  mcpres.className="res";
+  mcpnote.textContent="aplicando…";
+  try{
+    var r=await fetch("/api/mcp",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text:mcpjson.value})});
+    var j=await r.json();
+    if(!r.ok){
+      mcpnote.innerHTML="não apliquei: "+esc(j.erro||"erro");
+      mcpres.className="res err";
+      mcpres.textContent=(j.detalhes||[]).join(" — ")||String(j.erro||"");
+      return;
+    }
+    MCPJ={servers:j.servers||[]};
+    mcpSync();
+    mcpnote.innerHTML="salvo · backup: "+esc(j.backup||"—")+
+      " · processos já aplicados";
+    mcpres.className="res ok";
+    mcpres.textContent=(j.servers||[]).map(function(s){
+      return s.nome+": "+(s.status||"?")+(s.erro?" ("+s.erro+")":"");
+    }).join("\n");
+  }catch(e){ mcpnote.textContent="erro de rede: "+e; }
+}
+
+$("#mcpclose").addEventListener("click",fechaMcp);
+$("#mcpcancel").addEventListener("click",fechaMcp);
+mcpov.addEventListener("click",function(e){ if(e.target===mcpov) fechaMcp(); });
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&mcpov.classList.contains("open")){
+    fechaMcp();
+    e.stopImmediatePropagation();   /* não fecha o menu que está por baixo */
+  }
+});
+$("#mcpadd").addEventListener("click",function(){
+  MCPJ.servers.push({nome:"novo-mcp",cmd:"",args:[],ativo:true});
+  mcpSync();
+  mcpnote.innerHTML="edite <b>nome/comando</b> aqui, ou args/env/instalar no JSON — depois <b>aplicar</b>";
+  var last=mcpbody.querySelectorAll(".mrow input.f.cm");
+  if(last.length) last[last.length-1].focus();
+});
+$("#mcpapply").addEventListener("click",mcpAplicar);
+mcpjson.addEventListener("input",function(){
+  try{ mcpParse(mcpjson.value); mcpPinta();
+       mcpnote.textContent="json válido — falta clicar em aplicar"; }
+  catch(err){
+    mcpnote.innerHTML="json inválido: "+esc(err&&err.message)+
+      " — a lista segue na última versão válida";
+  }
+});
+mcpbody.addEventListener("input",function(e){   /* campos da lista -> json */
+  var f=e.target.getAttribute&&e.target.getAttribute("data-f");
+  if(!f) return;
+  var i=+(e.target.getAttribute("data-i"));
+  if(!MCPJ.servers[i]) return;
+  MCPJ.servers[i][f]=e.target.value;
+  mcpjson.value=mcpTexto();                    /* não repinta: perde o foco */
+});
+mcpbody.addEventListener("change",function(e){
+  var t=e.target.getAttribute&&e.target.getAttribute("data-tg");
+  if(t===null||t===undefined) return;
+  var i=+t;
+  if(!MCPJ.servers[i]) return;
+  MCPJ.servers[i].ativo=e.target.checked;
+  mcpSync();
+});
+mcpbody.addEventListener("click",function(e){
+  var r=e.target.getAttribute&&e.target.getAttribute("data-rm");
+  if(r===null||r===undefined) return;
+  MCPJ.servers.splice(+r,1);
+  mcpSync();
+  mcpnote.innerHTML="removido da lista — vale depois de <b>aplicar</b>";
+});
 log.addEventListener("click",function(e){
   var sel=window.getSelection?String(window.getSelection()):"";
   if(sel&&sel.trim()) return;              /* selecionando texto: não abre */
@@ -1403,6 +1626,17 @@ function render(){
       '<div class="gh">'+esc(t.label)+" · "+list.length+"</div>"+
       list.map(rowHtml).join("")+"</div>";
   }
+  html+='<div class="grp" data-tab="outros">'+
+    '<div class="gh">outros · 1</div>'+
+    '<div class="row" data-tab="outros" data-key="mcp" '+
+      'data-s="config de mcp servidores mcp.json">'+
+      '<div class="fl"><code>mcp</code></div>'+
+      '<div class="ctl"><button class="btn" data-abre="mcp" '+
+        'style="height:32px;font-weight:600">config de mcp</button></div>'+
+      '<div class="dsc">adicionar / remover / ativar servidores MCP '+
+        'e editar o <code>mcp.json</code></div>'+
+    '</div>'+
+  '</div>';
   bodyEl.innerHTML=html;
   syncSwitches();
   filter();
@@ -1419,6 +1653,9 @@ function syncSwitches(){
 bodyEl.addEventListener("change",function(e){
   if(e.target.type==="checkbox") syncSwitches();
 });
+bodyEl.addEventListener("click",function(e){
+  if(e.target.closest&&e.target.closest('[data-abre="mcp"]')) abreMcp();
+});
 
 function filter(){
   var q=searchEl.value.trim().toLowerCase();
@@ -1430,7 +1667,8 @@ function filter(){
       for(var i=0;i<rows.length;i++){
         var hit=rows[i].getAttribute("data-s").indexOf(q)>=0;
         rows[i].style.display=hit?"":"none";
-        if(hit){ any++; total++; }
+        if(hit && rows[i].getAttribute("data-tab")!=="outros"){ any++; total++; }
+        else if(hit){ any++; }
       }
       g.style.display=any?"":"none";
       g.querySelector(".gh").style.display="";
@@ -1438,7 +1676,10 @@ function filter(){
       var on = g.getAttribute("data-tab")===tabAct;
       g.style.display=on?"":"none";
       var rs=g.querySelectorAll(".row");
-      for(var k=0;k<rs.length;k++){ rs[k].style.display=""; total++; }
+      for(var k=0;k<rs.length;k++){
+        rs[k].style.display="";
+        if(rs[k].getAttribute("data-tab")!=="outros") total++;
+      }
     }
   });
   cntEl.textContent = q ? (total+" de "+FLAGS.length) : (FLAGS.length+" flags");
@@ -1451,6 +1692,7 @@ function renderTabs(){
     if(!n) return;
     html+='<button class="tab" data-tab="'+t.id+'">'+esc(t.label)+" · "+n+"</button>";
   });
+  html+='<button class="tab" data-tab="outros">outros · 1</button>';
   tabsEl.innerHTML=html;
   tabsEl.addEventListener("click",function(e){
     var b=e.target.closest(".tab"); if(!b) return;
