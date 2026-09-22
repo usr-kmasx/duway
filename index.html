@@ -152,6 +152,8 @@
   #toolov .mhead .x{margin-left:auto}
   #tooltxt pre{background:var(--fg);color:var(--bg);padding:9px 11px;
     overflow-x:auto;font-size:13px;white-space:pre-wrap;word-break:break-word}
+  #permov .modal{width:min(520px,100%);height:auto;max-height:70vh}
+  #permov .mhead .x{margin-left:auto}
   .pens{white-space:pre-wrap;word-break:break-word;padding:14px 18px;
         font-size:13.5px;line-height:1.7}
 
@@ -420,6 +422,21 @@
       <button class="x" id="toolclose" title="fechar">✕</button>
     </div>
     <div class="mbody"><div class="pens" id="tooltxt"></div></div>
+  </div>
+</div>
+
+<div class="ov" id="permov">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="confirmar ferramenta">
+    <div class="mhead">
+      <h2>permitir?</h2>
+      <span class="hcnt" id="permstat"></span>
+    </div>
+    <div class="mbody"><div class="pens" id="permtxt" style="white-space:pre-wrap"></div></div>
+    <div class="mfoot">
+      <button class="btn" id="perm1x" style="height:34px">permitir 1x</button>
+      <button class="btn" id="permses" style="height:34px">liberar sessão</button>
+      <button class="btn" id="permnao" style="height:34px">recusar</button>
+    </div>
   </div>
 </div>
 
@@ -978,6 +995,34 @@ function htmlMsg(m){
 
 /* ================= ferramentas (mcp) pro modelo ================= */
 var TOOLS=[], TOOLMAP={};   /* payload OpenAI tools + mapa nome->servidor */
+/* liberar-sessão: servidor -> true (só memória da página; F5 limpa) */
+var PERM_SESSAO={};
+/* popup de permissão: 'once' | 'sessao' | 'nao' | null (abortado) */
+function perguntaPermissao(titulo,pergun,signal){
+  return new Promise(function(res){
+    var ov=$("#permov"), tx=$("#permtxt"), st=$("#permstat");
+    var b1=$("#perm1x"), bs=$("#permses"), bn=$("#permnao");
+    var feito=false;
+    function fecha(v){
+      if(feito) return; feito=true;
+      ov.classList.remove("open");
+      if(signal) try{ signal.removeEventListener("abort",noAbort); }catch(e){}
+      res(v);
+    }
+    function noAbort(){ fecha(null); }
+    st.textContent=titulo;
+    tx.textContent=pergun;
+    b1.onclick=function(){ fecha("once"); };
+    bs.onclick=function(){ fecha("sessao"); };
+    bn.onclick=function(){ fecha("nao"); };
+    ov.onclick=function(e){ if(e.target===ov) fecha("nao"); };
+    if(signal){
+      if(signal.aborted) return fecha(null);
+      try{ signal.addEventListener("abort",noAbort); }catch(e){}
+    }
+    ov.classList.add("open");
+  });
+}
 
 function montaTools(lista){
   var usados={};
@@ -1079,11 +1124,16 @@ async function executaTools(calls,signal){
         var pergun=j.pergunta||("fora da base:\n- "+(j.fora||[]).join("\n- "));
         f.ft.textContent=mostra+"\n… aguardando confirmação";
         f.el.chamada.estado="aguardando confirmação";
-        var okc=false;
-        try{ okc=window.confirm("mcp "+mapa.servidor+" · "+mapa.name+
-                               "\n\n"+pergun); }
-        catch(e2){ okc=false; }
-        if(!okc){
+        var esc2=PERM_SESSAO[mapa.servidor]?"sessao"
+          :await perguntaPermissao("mcp "+mapa.servidor+" · "+mapa.name,
+                                   pergun,signal);
+        if(esc2===null){
+          f.ft.textContent=mostra+"\n⏹ interrompido";
+          f.el.chamada.estado="interrompida";
+          f.el.chamada.resultado="(interrompido pelo usuário)";
+          return null;
+        }
+        if(esc2!=="once"&&esc2!=="sessao"){
           f.ft.textContent=mostra+"\n✗ recusado por você";
           f.el.chamada.estado="recusada por você";
           f.el.chamada.resultado="usuário recusou: fora da base ("+
@@ -1471,6 +1521,16 @@ function toolResultadoHtml(res){
     }).join("");
   }
   if(j!==null&&typeof j==="object"){
+    if(!Array.isArray(j)&&typeof j.command==="string"&&"output" in j){
+      var rc=j.return_code;
+      var badge=(typeof rc==="number")
+        ? (rc===0?' <span style="opacity:.7">✓ ok</span>'
+                 :' <span style="opacity:.7">✗ saiu com '+rc+"</span>")
+        : "";
+      return '<div style="margin-bottom:6px"><code>'+
+        esc(j.command)+"</code>"+badge+"</div>"+
+        "<pre>"+esc(String(j.output))+"</pre>";
+    }
     if(!Array.isArray(j)&&typeof j.content==="string"&&(j.url||j.title)){
       var u=String(j.url||""), dom=u.replace(/^https?:\/\//i,"").split("/")[0];
       var plink=/^https?:\/\//i.test(u)
