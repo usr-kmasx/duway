@@ -2,3 +2,6 @@
 cache/
 __pycache__/
 server.log
+
+# redirecionamento Windows (> nul) criado pelo shell em comandos do modelo
+nul
