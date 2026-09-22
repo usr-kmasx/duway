@@ -333,6 +333,7 @@
 
 <footer>
   <div class="frow">
+    <button class="ico" id="anexar" title="anexar arquivo (ou arraste / cole)">+</button>
     <textarea id="input" placeholder="escreva… — ou arraste arquivos aqui" rows="1"></textarea>
     <button class="btn" id="send">enviar</button>
     <button class="btn" id="clear" title="novo chat (sessão nova, ctx zerado)">novo</button>
@@ -441,7 +442,7 @@
                 aria-label="texto da mensagem"></textarea>
     </div>
     <div class="mfoot">
-      <button class="ico" id="anexar" title="anexar arquivo (ou arraste / cole)">+</button>
+      <button class="ico" id="canexar" title="anexar arquivo (ou arraste / cole)">+</button>
       <span class="note" id="compnote">enter envia · shift+enter quebra linha · esc mantém o rascunho</span>
       <button class="btn" id="csend" style="height:34px;min-width:110px;font-weight:600">enviar</button>
     </div>
@@ -837,8 +838,10 @@ function colarArquivos(e){
 input.addEventListener("paste",colarArquivos);
 cinput.addEventListener("paste",colarArquivos);
 
-/* ---- botao + (arquivo do disco) ---- */
-$("#anexar").addEventListener("click",function(){ abrirComp(); fileIn.click(); });
+/* ---- botao + (arquivo do disco): um no rodapé, outro na janela ---- */
+function clicaMais(){ abrirComp(); fileIn.click(); }
+$("#anexar").addEventListener("click",clicaMais);
+$("#canexar").addEventListener("click",clicaMais);
 fileIn.addEventListener("change",function(){ addFiles(fileIn.files); fileIn.value=""; });
 
 function esc(s){
