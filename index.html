@@ -162,6 +162,10 @@
   #cinput{flex:1;min-height:160px;resize:none}
   #compov .mfoot .ico{height:34px;width:34px}
   #input{overflow:hidden}   /* 1 linha só: passou disso, a janela assume */
+  /* ---------------- fundo com foto (vale pros dois temas) ---------------- */
+  body.fundo{background-size:cover;background-position:center;background-attachment:fixed}
+  body.fundo::before{content:"";position:fixed;inset:0;background:var(--bg);
+    opacity:.8;z-index:-1;pointer-events:none}   /* véu do tema: texto legível */
   #mcpov .modal{width:min(860px,100%);height:min(88vh,900px)}
   #mcpov .mhead .x{margin-left:auto}
   .mcppath{font-size:11px;opacity:var(--mut);max-width:46%;
@@ -2025,18 +2029,29 @@ function render(){
       '<div class="dsc">adicionar / remover / ativar servidores MCP '+
         'e editar o <code>mcp.json</code></div>'+
     '</div>';
+  var BGLINHA=
+    '<div class="row" data-tab="outros" data-key="fundo" '+
+      'data-s="fundo papel de parede foto imagem background tema claro escuro">'+
+      '<div class="fl"><code>fundo</code></div>'+
+      '<div class="ctl"><button class="btn" id="bgescolher" '+
+        'style="height:32px;font-weight:600">escolher foto…</button> '+
+        '<button class="mini" id="bgtirar" title="voltar ao fundo chapado">✕</button>'+
+        '<input type="file" id="bgfile" accept="image/*" hidden></div>'+
+      '<div class="dsc"><span id="bgstat">fundo chapado do tema</span></div>'+
+    '</div>';
   for(ti=0;ti<TABS.length;ti++){
     t=TABS[ti];
     list=FLAGS.filter(function(f){ return f.tab===t.id; });
     if(!list.length) continue;
     var mcpNoGrupo=(t.id==="geral");
     html+='<div class="grp" data-tab="'+t.id+'">'+
-      '<div class="gh">'+esc(t.label)+" · "+(list.length+(mcpNoGrupo?1:0))+"</div>"+
-      list.map(rowHtml).join("")+(mcpNoGrupo?MCPLINHA:"")+"</div>";
+      '<div class="gh">'+esc(t.label)+" · "+(list.length+(mcpNoGrupo?2:0))+"</div>"+
+      list.map(rowHtml).join("")+(mcpNoGrupo?MCPLINHA+BGLINHA:"")+"</div>";
   }
   bodyEl.innerHTML=html;
   syncSwitches();
   filter();
+  pintaFundo();
 }
 
 /* checkbox: reflete o estado em texto p/ o .sw */
@@ -2053,6 +2068,70 @@ bodyEl.addEventListener("change",function(e){
 bodyEl.addEventListener("click",function(e){
   if(e.target.closest&&e.target.closest('[data-abre="mcp"]')) abreMcp();
 });
+
+/* ---------------- fundo com foto (vale pros dois temas) ---------------- */
+var FUNDO=null;   /* {nome, dataUrl} ou null */
+function aplicaFundo(){
+  if(FUNDO&&FUNDO.dataUrl){
+    document.body.classList.add("fundo");
+    document.body.style.backgroundImage='url("'+FUNDO.dataUrl+'")';
+  }else{
+    document.body.classList.remove("fundo");
+    document.body.style.backgroundImage="";
+  }
+}
+function pintaFundo(){
+  var st=bodyEl.querySelector("#bgstat");
+  if(st) st.textContent=(FUNDO&&FUNDO.nome)?FUNDO.nome:"fundo chapado do tema";
+  var be=bodyEl.querySelector("#bgescolher");
+  if(be) be.onclick=function(){
+    var f=bodyEl.querySelector("#bgfile"); if(f) f.click();
+  };
+  var bt=bodyEl.querySelector("#bgtirar");
+  if(bt) bt.onclick=function(){
+    FUNDO=null; aplicaFundo(); pintaFundo();
+    idbDel("fundo").catch(function(){});
+  };
+  var bf=bodyEl.querySelector("#bgfile");
+  if(bf) bf.onchange=function(){
+    if(bf.files&&bf.files[0]) guardaFundo(bf.files[0]);
+    bf.value="";
+  };
+}
+function guardaFundo(file){
+  reduzFoto(file).then(function(d){
+    FUNDO=d; aplicaFundo(); pintaFundo();
+    return idbSet("fundo",d);
+  }).catch(function(){});
+}
+/* foto grande vira no máximo 1920px (jpeg 0.85) pra não estourar o IDB */
+function reduzFoto(file){
+  return new Promise(function(res,rej){
+    var url=URL.createObjectURL(file);
+    var img=new Image();
+    img.onload=function(){
+      try{
+        var w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+        var k=Math.min(1,1920/Math.max(w,h));
+        var cw=Math.max(1,Math.round(w*k)), ch=Math.max(1,Math.round(h*k));
+        var c=document.createElement("canvas");
+        c.width=cw; c.height=ch;
+        c.getContext("2d").drawImage(img,0,0,cw,ch);
+        URL.revokeObjectURL(url);
+        var tipo=(file.type==="image/png")?"image/png":"image/jpeg";
+        res({nome:file.name||"foto",dataUrl:c.toDataURL(tipo,0.85)});
+      }catch(e){ URL.revokeObjectURL(url); rej(e); }
+    };
+    img.onerror=function(){ URL.revokeObjectURL(url); rej(new Error("não li a imagem")); };
+    img.src=url;
+  });
+}
+function carregaFundo(){
+  idbGet("fundo").then(function(d){
+    if(d&&d.dataUrl){ FUNDO=d; aplicaFundo(); pintaFundo(); }
+  }).catch(function(){});
+}
+carregaFundo();
 
 function filter(){
   var q=searchEl.value.trim().toLowerCase();
@@ -2087,7 +2166,7 @@ function renderTabs(){
   TABS.forEach(function(t){
     var n=FLAGS.filter(function(f){ return f.tab===t.id; }).length;
     if(!n) return;
-    if(t.id==="geral") n++; // conta o botao do mcp que mora nesta aba
+    if(t.id==="geral") n+=2; // mcp + fundo moram nesta aba
     html+='<button class="tab" data-tab="'+t.id+'">'+esc(t.label)+" · "+n+"</button>";
   });
   tabsEl.innerHTML=html;
