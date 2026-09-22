@@ -518,6 +518,12 @@ function idbDel(k){
 /* ================= chat ================= */
 var log=$("#log"), empty=$("#empty"), input=$("#input"), sendBtn=$("#send"),
     clearBtn=$("#clear"), dot=$("#dot"), stxt=$("#stxt");
+/* scroll natural: só acompanha se o usuário já está embaixo (80px).
+   lê a geometria na hora — sem estado, sem corrida com o stream */
+function desceSePerto(){
+  if(log.scrollHeight-log.scrollTop-log.clientHeight<80)
+    log.scrollTop=log.scrollHeight;
+}
 var compov=$("#compov"), cinput=$("#cinput"), csend=$("#csend");
 
 var history=[], busy=false, controller=null;
@@ -935,7 +941,7 @@ function addMsg(role,text,html,quem,pens){
   el.appendChild(body);
   if(pens){ el.pensamento=pens; poePt(el,false); }   /* restaurada: já pensou */
   log.appendChild(el);
-  log.scrollTop=log.scrollHeight;
+  desceSePerto();
   return body;
 }
 /* html de uma mensagem restaurada (IDB): miniaturas das imagens + texto */
@@ -996,7 +1002,7 @@ function ferrMsg(nome,det){
   var ft=el.querySelector(".ft");
   ft.textContent=det;
   log.appendChild(el);
-  log.scrollTop=log.scrollHeight;
+  desceSePerto();
   return {el:el,ft:ft};
 }
 function toolTexto(res){        /* resultado MCP -> texto pro modelo */
@@ -1177,7 +1183,7 @@ async function umaRodada(nomeGer,extras,ctl){
           }
         }catch(e){}
       }
-      log.scrollTop=log.scrollHeight;
+      desceSePerto();
     }
     paraPens();
     var calls=tcAcc.filter(function(a){ return a&&a.function&&a.function.name; })
@@ -1308,7 +1314,7 @@ async function gera(){
     }
   }finally{
     busy=false; controller=null; sendBtn.textContent="enviar"; csend.textContent="enviar";
-    log.scrollTop=log.scrollHeight;
+    desceSePerto();
     apagaPend();     /* terminou (completo/parado/erro): nada a retomar */
     salvarSessao();   /* guarda a conversa no histórico (texto + imagens) */
   }
@@ -1772,7 +1778,7 @@ async function retomar(){
   log.innerHTML='<div class="empty" id="empty">conversa vazia</div>';
   empty=document.getElementById("empty");
   history.forEach(function(m){ addMsg(m.role,soTexto(m.content),htmlMsg(m),m.modelo,m.pens); });
-  log.scrollTop=log.scrollHeight;
+  desceSePerto();
   var ult=p.h[p.h.length-1];
   if(ult&&ult.role!=="assistant") gera();   /* continua gerando de onde parou */
   else apagaPend();
@@ -1832,7 +1838,7 @@ function abreConversa(id){
   log.innerHTML='<div class="empty" id="empty">conversa vazia</div>';
   empty=document.getElementById("empty");
   history.forEach(function(m){ addMsg(m.role,soTexto(m.content),htmlMsg(m),m.modelo,m.pens); });
-  log.scrollTop=log.scrollHeight;
+  desceSePerto();
   fechaHist();
 }
 /* browse: so "selecionar" | selecao: voltar + marcar tudo + salvar + apagar */
