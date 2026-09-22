@@ -451,7 +451,6 @@ def write_config(text, known_keys, destino):
 MCP_PATH = Path(
     os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")
 ) / "duway" / "mcp.json"
-VENV_DIR = ROOT / ".venv"
 CACHE_DIR = ROOT / "cache"
 
 MCPS = {}          # nome -> registro {spec, proc, status, erro, tools, ...}
@@ -930,9 +929,6 @@ def _mcp_boot():
             return
         if not servers:
             return
-        if not VENV_DIR.exists():
-            subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)],
-                           check=True, timeout=120, env=_mcp_env())
         print("mcp   ->  %d servidor(es), %d ativo(s)" % (
             len(servers), len([s for s in servers if s.get("ativo", True)])))
         _mcp_aplicar(servers)
@@ -1156,17 +1152,6 @@ class Handler(BaseHTTPRequestHandler):
         if erro:
             return self._json({"erro": "mcp.json invalido",
                                "detalhes": [erro]}, 400)
-
-        # .venv do projeto: nasce so na 1a gravacao (nunca toca o sistema)
-        if not VENV_DIR.exists():
-            try:
-                VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(
-                    [sys.executable, "-m", "venv", str(VENV_DIR)],
-                    check=True, timeout=180, env=_mcp_env(),
-                )
-            except Exception as e:  # noqa: BLE001
-                return self._json({"erro": "nao criei o .venv: %s" % e}, 500)
 
         try:
             bak = _mcp_gravar(text)
