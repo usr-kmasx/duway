@@ -471,6 +471,9 @@ def _mcp_env(extra=None):
     lb = str(HOME / ".local" / "bin")
     if lb not in env.get("PATH", "").split(":"):
         env["PATH"] = lb + ":" + env.get("PATH", "")
+    rb = str(ROOT / "bin")   # shim google-chrome -> chromium (só nos processos MCP)
+    if rb not in env.get("PATH", "").split(":"):
+        env["PATH"] = rb + ":" + env.get("PATH", "")
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
     return env
@@ -594,7 +597,7 @@ def _mcp_stderr(m):
         line = line.rstrip()
         if line:
             m["stderr"].append(line)
-            del m["stderr"][:-20]
+            del m["stderr"][:-100]   # guarda mais linhas: crash do chrome cabe
 
 
 def _mcp_matar(m):
@@ -732,6 +735,7 @@ def _mcp_status(servers=None):
                 "ativo": bool(s.get("ativo", True)),
                 "status": m.get("status", "parado"),
                 "erro": m.get("erro", ""),
+                "log": m.get("stderr", [])[-20:],   # últimas linhas do stderr
                 "tools": [
                     {"name": t.get("name", ""),
                      "description": t.get("description", "")}

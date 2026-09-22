@@ -1,0 +1,4 @@
+#!/bin/sh
+# shim: o webdriver-manager/chromedriver procuram "google-chrome";
+# aqui só existe chromium — mesma coisa na prática.
+exec /usr/bin/chromium "$@"
