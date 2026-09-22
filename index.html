@@ -155,6 +155,7 @@
   #permov .modal{width:min(520px,100%);height:auto;max-height:70vh}
   #permov .mhead .x{margin-left:auto}
   #usov .modal{width:min(560px,100%);height:auto;max-height:70vh}
+  #usov{z-index:70}   /* abre por cima da config de mcp (60) */
   #usov .mhead .x{margin-left:auto}
   .pens{white-space:pre-wrap;word-break:break-word;padding:14px 18px;
         font-size:13.5px;line-height:1.7}
@@ -452,7 +453,8 @@
     <div class="mbody" id="usobody"></div>
     <div class="mfoot">
       <button class="btn" id="usoadd" style="height:34px">+ adicionar</button>
-      <span class="note">comando exato passa sem permissão — vale depois de <b>aplicar</b></span>
+      <span class="note">comando exato passa sem permissão</span>
+      <button class="btn" id="usoapply" style="height:34px;min-width:110px;font-weight:600">aplicar</button>
     </div>
   </div>
 </div>
@@ -1807,19 +1809,30 @@ function pintaUso(){
       '<button class="mini" data-uorm="'+k+'" title="remover">✕</button></div>';
   }).join("");
 }
-function fechaUso(){
+function despejaUso(){
   var s=MCPJ.servers[USO_I];
-  if(s){
-    if(!s.uso||typeof s.uso!=="object") s.uso={};
-    var limpa=USO_LIST.map(function(p){ return String(p); }).filter(
-      function(p){ return p.trim()!==""; });
-    if(limpa.length) s.uso.permitidos=limpa;
-    else delete s.uso.permitidos;
-    mcpSync();
+  if(!s) return false;
+  if(!s.uso||typeof s.uso!=="object") s.uso={};
+  var limpa=USO_LIST.map(function(p){ return String(p); }).filter(
+    function(p){ return p.trim()!==""; });
+  if(limpa.length) s.uso.permitidos=limpa;
+  else delete s.uso.permitidos;
+  mcpSync();
+  return true;
+}
+function fechaUso(){
+  if(despejaUso())
     mcpnote.innerHTML="permitidos atualizados — vale depois de <b>aplicar</b>";
-  }
   USO_I=-1;
   usov.classList.remove("open");
+}
+async function usoAplicar(){
+  if(!despejaUso()) return;
+  await mcpAplicar();
+  if(mcpnote.textContent.indexOf("salvo")>=0){
+    USO_I=-1;
+    usov.classList.remove("open");
+  }
 }
 usobody.addEventListener("input",function(e){
   var k=e.target.getAttribute&&e.target.getAttribute("data-uoi");
@@ -1839,6 +1852,7 @@ $("#usoadd").addEventListener("click",function(){
   if(ins.length) ins[ins.length-1].focus();
 });
 $("#usoclose").addEventListener("click",fechaUso);
+$("#usoapply").addEventListener("click",usoAplicar);
 usov.addEventListener("click",function(e){ if(e.target===usov) fechaUso(); });
 document.addEventListener("keydown",function(e){
   if(e.key==="Escape"&&usov.classList.contains("open")) fechaUso();
