@@ -1435,7 +1435,38 @@ function toolDetalhe(c){
     '<div style="opacity:.6;font-size:12px">args</div>'+
     "<pre>"+esc(args)+"</pre>"+
     '<div style="opacity:.6;font-size:12px;margin-top:8px">resultado</div>'+
-    "<pre>"+esc(c.resultado||"(sem resultado)")+"</pre>";
+    toolResultadoHtml(c.resultado);
+}
+/* resultado organizado SÓ pra exibir (o modelo recebe o texto cru):
+   lista de resultados vira cards, outro JSON vira indentado */
+function toolResultadoHtml(res){
+  if(!res) return "<pre>(sem resultado)</pre>";
+  var t=String(res), j=null;
+  try{ j=JSON.parse(t); }catch(e){}
+  if(Array.isArray(j)&&j.length&&j[0]&&typeof j[0]==="object"&&
+     ("title" in j[0]||"url" in j[0])){
+    return j.map(function(r,i){
+      r=r||{};
+      var link="";
+      if(r.url){
+        var u=String(r.url);
+        link=/^https?:\/\//i.test(u)
+          ? '<div><a href="'+esc(u)+'" target="_blank" rel="noopener"'+
+            ' style="font-size:12px">'+esc(u)+"</a></div>"
+          : '<div style="font-size:12px">'+esc(u)+"</div>";
+      }
+      return '<div style="margin:0 0 10px">'+
+        "<div><b>"+(i+1)+". "+esc(r.title||r.url||("item "+(i+1)))+"</b>"+
+        (r.domain?' <span style="opacity:.6">· '+esc(r.domain)+"</span>":"")+
+        (r.source_engine?' <span style="opacity:.6">· '+esc(r.source_engine)+
+          "</span>":"")+"</div>"+
+        (r.snippet?'<div style="opacity:.85">'+esc(r.snippet)+"</div>":"")+
+        link+"</div>";
+    }).join("");
+  }
+  if(j!==null&&typeof j==="object")
+    return "<pre>"+esc(JSON.stringify(j,null,2))+"</pre>";
+  return "<pre>"+esc(t)+"</pre>";
 }
 function abreTool(el){
   var c=el.chamada||{};
