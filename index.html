@@ -82,6 +82,16 @@
   .msg.ferr{opacity:.85;font-size:12.5px;border-style:dashed;max-width:min(560px,88%)}
   .msg.error{border-style:dashed}
   .msg pre{background:var(--fg);color:var(--bg);padding:9px 11px;margin:7px 0 2px;overflow-x:auto;font-size:13px;white-space:pre}
+  .msg .mdh{font-weight:700;margin:8px 0 3px;line-height:1.3}
+  .msg .mdh.h1{font-size:17px}.msg .mdh.h2{font-size:16px}
+  .msg .mdh.h3{font-size:14.5px}.msg .mdh.h4{font-size:13.5px}
+  .msg hr{border:0;border-top:1px solid currentColor;opacity:.4;margin:9px 0}
+  .msg blockquote{border-left:3px solid currentColor;margin:6px 0;padding:2px 0 2px 10px;opacity:.88}
+  .msg ul,.msg ol{margin:5px 0 5px 22px;padding:0}
+  .msg li{margin:2px 0}
+  .msg table{border-collapse:collapse;margin:7px 0;font-size:12.5px;max-width:100%}
+  .msg th,.msg td{border:1px solid currentColor;padding:4px 8px;text-align:left}
+  .msg code{background:var(--fg);color:var(--bg);padding:1px 5px;font-size:12.5px}
   .msg a{color:inherit;text-decoration:underline}
   .caret{display:inline-block;width:8px;height:15px;background:currentColor;vertical-align:-2px;animation:blink 1s steps(1) infinite}
   @keyframes blink{50%{opacity:0}}
@@ -804,12 +814,66 @@ function esc(s){
 function inline(s){
   return s
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+    .replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g,"$1<i>$2</i>")
+    .replace(/~~([^~\n]+)~~/g,"<del>$1</del>");
 }
+/* markdown seguro p/ o balão: escapa tudo, protege código com placeholder
+   de uma linha, e monta títulos, listas, tabelas, citas, hr e inline */
 function fmt(s){
-  return inline(esc(s)).replace(/```([\s\S]*?)```/g,function(_,code){
-    return "<pre>"+code.replace(/^\n/,"").replace(/\n$/,"")+"</pre>";
+  var codes=[];
+  function guarda(html){ codes.push(html); return "\ue000"+(codes.length-1)+"\ue001"; }
+  var t=esc(s);
+  t=t.replace(/```(\w*)\n?([\s\S]*?)```/g,function(_,lang,code){
+    return guarda("<pre>"+code.replace(/^\n/,"").replace(/\n$/,"")+"</pre>");
   });
+  t=t.replace(/`([^`\n]+)`/g,function(_,code){
+    return guarda("<code>"+code+"</code>");
+  });
+  var linhas=t.split("\n"), out=[], i=0, l, m;
+  function ehSep(x){ return /^\|[\s:|\-]+\|\s*$/.test(x)&&/-/.test(x); }
+  while(i<linhas.length){
+    l=linhas[i];
+    if((m=l.match(/^(#{1,4})\s+(.*)$/))){
+      out.push('<div class="mdh h'+m[1].length+'">'+inline(m[2])+'</div>');
+      i++; continue;
+    }
+    if(/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)){ out.push("<hr>"); i++; continue; }
+    if((m=l.match(/^&gt;\s?(.*)$/))){
+      var qs=[];
+      while(i<linhas.length&&((m=linhas[i].match(/^&gt;\s?(.*)$/)))){
+        qs.push(inline(m[1])); i++;
+      }
+      out.push("<blockquote>"+qs.join("<br>")+"</blockquote>"); continue;
+    }
+    if(/^\|.*\|\s*$/.test(l)&&i+1<linhas.length&&ehSep(linhas[i+1])){
+      var hc=l.slice(1).replace(/\|\s*$/,"").split("|");
+      var htm="<table><thead><tr>"+hc.map(function(c){
+        return "<th>"+inline(c.trim())+"</th>"; }).join("")+"</tr></thead><tbody>";
+      i+=2;
+      var bd=[];
+      while(i<linhas.length&&/^\|.*\|\s*$/.test(linhas[i])){
+        var cc=linhas[i].slice(1).replace(/\|\s*$/,"").split("|");
+        bd.push("<tr>"+cc.map(function(c){
+          return "<td>"+inline(c.trim())+"</td>"; }).join("")+"</tr>");
+        i++;
+      }
+      out.push(htm+bd.join("")+"</tbody></table>"); continue;
+    }
+    if((m=l.match(/^\s*([-*+])\s+(.*)$/))||(m=l.match(/^\s*\d+\.\s+(.*)$/))){
+      var ol=/^\s*\d+\./.test(l), itens=[];
+      while(i<linhas.length){
+        var m2=ol?linhas[i].match(/^\s*\d+\.\s+(.*)$/)
+                 :linhas[i].match(/^\s*([-*+])\s+(.*)$/);
+        if(!m2) break;
+        itens.push("<li>"+inline(ol?m2[1]:m2[2])+"</li>"); i++;
+      }
+      out.push((ol?"<ol>":"<ul>")+itens.join("")+(ol?"</ol>":"</ul>"));
+      continue;
+    }
+    out.push(inline(l)); i++;
+  }
+  return out.join("\n").replace(/\ue000(\d+)\ue001/g,function(_,n){ return codes[+n]; });
 }
 /* bolinha de pensamento antes do nome: só existe se essa resposta pensou */
 function poePt(el,piscando){
