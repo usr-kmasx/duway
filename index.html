@@ -79,6 +79,7 @@
         border-radius:50%;margin-right:7px;vertical-align:middle;opacity:.85;font-style:normal}
   .msg .who .pt.piscando{animation:blink 1s step-end infinite}
   .msg.bot{align-self:flex-start;background:var(--bg);color:var(--fg)}
+  .msg.ferr{opacity:.85;font-size:12.5px;border-style:dashed;max-width:min(560px,88%)}
   .msg.error{border-style:dashed}
   .msg pre{background:var(--fg);color:var(--bg);padding:9px 11px;margin:7px 0 2px;overflow-x:auto;font-size:13px;white-space:pre}
   .msg a{color:inherit;text-decoration:underline}
@@ -848,47 +849,153 @@ function htmlMsg(m){
   return (att?'<span class="att">'+att+"</span>":"")+fmt(txt.join("\n"));
 }
 
-async function send(){
-  var text=input.value.trim();
-  if(busy) return;
-  /* esperando leitura/extracao de anexo? (chip "lendo…" visivel) */
-  if(anexos.some(function(a){ return a.estado==="lendo"; })) return;
-  var prontos=anexos.filter(function(a){ return a.estado==="ok"; });
-  if(!text && !prontos.length) return;
-  busy=true; sendBtn.textContent="parar";   /* trava ja: o pend leva um instante */
-  fetchModel();
-  input.value=""; input.style.height="44px";
-  var um=montarUsuario(text,prontos);
-  addMsg("user",text,um.html);
-  history.push({role:"user",content:um.content});
-  limparAnexos();
-  /* estado salvo ANTES do stream, com as imagens: refresh nao perde nada */
-  try{ await gravaPend(); }catch(e){}
-  gera();
+/* ================= ferramentas (mcp) pro modelo ================= */
+var TOOLS=[], TOOLMAP={};   /* payload OpenAI tools + mapa nome->servidor */
+
+function montaTools(lista){
+  var usados={};
+  TOOLS=[]; TOOLMAP={};
+  (lista||[]).forEach(function(s){
+    if(!s.ativo) return;
+    (s.tools||[]).forEach(function(t){
+      if(!t||!t.name) return;
+      var nm=t.name;
+      if(usados[nm])   /* mesmo nome em 2 servidores: separa */
+        nm=nm+"__"+String(s.servidor||"mcp").replace(/[^a-zA-Z0-9_-]/g,"_");
+      usados[nm]=1;
+      TOOLMAP[nm]={servidor:s.servidor,name:t.name};
+      TOOLS.push({type:"function",function:{
+        name:nm,
+        description:String(t.description||("ferramenta "+t.name)),
+        parameters:(t.inputSchema&&typeof t.inputSchema==="object")?
+                   t.inputSchema:{type:"object",properties:{}}
+      }});
+    });
+  });
 }
-/* so a geracao: usado pelo envio normal e pela retomada pos-refresh */
-async function gera(){
-  busy=true; sendBtn.textContent="parar";   /* send ja travou; retomar passa por aqui */
-  await fetchModel();                       /* nome fresco: o balao nasce com ele */
-  var nomeGer=MODEL;
+async function carregaTools(){
+  try{
+    var r=await fetch("/api/tools");
+    var j=await r.json();
+    montaTools(j.servidores||[]);
+  }catch(e){ TOOLS=[]; TOOLMAP={}; }
+}
+
+/* balão pequeno de ferramenta: mostra args, progresso e resposta */
+function ferrMsg(nome,det){
+  var el=document.createElement("div");
+  el.className="msg bot ferr";
+  el.innerHTML='<span class="who">ferramenta · '+esc(nome)+'</span>'+
+               '<span class="ft"></span>';
+  var ft=el.querySelector(".ft");
+  ft.textContent=det;
+  log.appendChild(el);
+  log.scrollTop=log.scrollHeight;
+  return {el:el,ft:ft};
+}
+function toolTexto(res){        /* resultado MCP -> texto pro modelo */
+  var t=[];
+  if(res&&Array.isArray(res.content)){
+    res.content.forEach(function(c){
+      if(c&&c.type==="text") t.push(c.text||"");
+      else if(c) t.push(JSON.stringify(c));
+    });
+  }
+  var txt=t.join("\n");
+  if(!txt&&res&&res.structuredContent!=null) txt=JSON.stringify(res.structuredContent);
+  if(!txt&&res!=null) txt=JSON.stringify(res);
+  if(res&&res.isError) txt="ERRO da ferramenta:\n"+txt;
+  if(txt.length>12000) txt=txt.slice(0,12000)+"\n…(cortado)";
+  return txt||"(sem conteúdo)";
+}
+function toolErr(id,msg){
+  return {role:"tool",tool_call_id:id,content:String(msg)};
+}
+/* executa um lote de tool_calls; retorna null = o usuário deu parar */
+async function executaTools(calls,signal){
+  var resps=[];
+  for(var k=0;k<calls.length;k++){
+    var c=calls[k], fname=(c.function&&c.function.name)||"?";
+    var det=String((c.function&&c.function.arguments)||"{}");
+    var mostra=det.length>160?det.slice(0,160)+"…":det;
+    var f=ferrMsg(fname,mostra);
+    var mapa=TOOLMAP[fname];
+    if(!mapa){
+      f.ft.textContent=mostra+"\n✗ ferramenta desconhecida";
+      resps.push(toolErr(c.id,"ferramenta desconhecida: "+fname+
+        " — disponíveis: "+(Object.keys(TOOLMAP).join(", ")||"(nenhuma)")));
+      continue;
+    }
+    var args;
+    try{ args=JSON.parse(det||"{}"); }
+    catch(e){
+      f.ft.textContent=mostra+"\n✗ arguments não é JSON válido";
+      resps.push(toolErr(c.id,"arguments não é JSON válido: "+det.slice(0,300)));
+      continue;
+    }
+    f.ft.textContent=mostra+"\n→ executando…";
+    try{
+      var r=await fetch("/api/tool",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({servidor:mapa.servidor,name:mapa.name,arguments:args}),
+        signal:signal});
+      var j=await r.json();
+      if(!r.ok){
+        f.ft.textContent=mostra+"\n✗ "+(j.erro||("HTTP "+r.status));
+        resps.push(toolErr(c.id,"erro: "+(j.erro||("HTTP "+r.status))));
+        continue;
+      }
+      var txt=toolTexto(j.resultado);
+      f.ft.textContent=mostra+"\n✓ "+(txt.length>200?txt.slice(0,200)+"…":txt);
+      resps.push({role:"tool",tool_call_id:c.id,content:txt});
+    }catch(e){
+      if(e&&e.name==="AbortError"){
+        f.ft.textContent=mostra+"\n⏹ interrompido";
+        return null;
+      }
+      f.ft.textContent=mostra+"\n✗ "+((e&&e.message)||e);
+      resps.push(toolErr(c.id,"falha: "+((e&&e.message)||e)));
+    }
+  }
+  return resps;
+}
+
+/* uma rodada de streaming = um balão; fim: "fim" | "aborto" | "erro" */
+async function umaRodada(nomeGer,extras,ctl){
   var body=addMsg("bot","",null,nomeGer);
   body.innerHTML='<span class="caret"></span>';
-  var mEl=body.parentNode;               /* balão: bolinha e pensamento moram nele */
-  controller=new AbortController();
+  var mEl=body.parentNode;       /* balão: bolinha e pensamento moram nele */
   var acc="", nTok=0, fin=null, pens="", pensFim=false;
+  var tcAcc=[], autoId=0;
   var t0=performance.now(), tick=null;
   drawTps(0);
+  function paraPens(){
+    if(!pens) return;
+    pensFim=true;
+    var pf=mEl.querySelector(".who .pt");
+    if(pf) pf.classList.remove("piscando");
+    mEl.pensamento=pens;
+    if(pensovDe===mEl) penstxt.textContent=pens;
+  }
   try{
-    /* sem temperature: a amostragem vem do config.ini / do servidor */
+    var payload={
+      messages:history.map(function(m){
+        return {role:m.role,content:m.content};   /* manda só role/content */
+      }).concat(extras),                          /* + troca de ferramentas
+                                                     desta geração (transiente) */
+      stream:true
+    };
+    if(TOOLS.length) payload.tools=TOOLS;   /* modelo pode pedir as tools */
     var res=await fetch(base()+"/v1/chat/completions",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({messages:history.map(function(m){
-        return {role:m.role,content:m.content};   /* manda so role/content pro llama */
-      }),stream:true}),
-      signal:controller.signal
+      body:JSON.stringify(payload),
+      signal:ctl.signal
     });
-    if(!res.ok) throw new Error("HTTP "+res.status);
+    if(!res.ok){
+      var deta=""; try{ deta=(await res.text()).slice(0,300); }catch(e){}
+      throw new Error("HTTP "+res.status+(deta?" — "+deta:""));
+    }
     if(!res.body) throw new Error("sem streaming");
     setStatus(true);
 
@@ -912,6 +1019,18 @@ async function gera(){
         try{
           var j=JSON.parse(data), d=j.choices&&j.choices[0]&&j.choices[0].delta;
           if(j.timings&&j.timings.predicted_per_second) fin=j.timings;
+          if(d&&d.tool_calls){        /* modelo pedindo ferramenta (fragmentos) */
+            d.tool_calls.forEach(function(tc){
+              var ix=tc.index||0;
+              if(!tcAcc[ix]) tcAcc[ix]={id:"",function:{name:"",arguments:""}};
+              var a=tcAcc[ix];
+              if(tc.id) a.id=tc.id;
+              if(tc.function){
+                if(tc.function.name) a.function.name+=tc.function.name;
+                if(tc.function.arguments) a.function.arguments+=tc.function.arguments;
+              }
+            });
+          }
           if(d&&d.content){
             nTok++; acc+=d.content;
             if(pens&&!pensFim){          /* chegou texto: acabou de pensar */
@@ -932,49 +1051,114 @@ async function gera(){
       }
       log.scrollTop=log.scrollHeight;
     }
-    if(!acc) acc="(resposta vazia)";
-    body.innerHTML=fmt(acc);
-    var msgF={role:"assistant",content:acc,modelo:nomeGer};
-    if(pens) msgF.pens=pens;   /* o que ele pensou vai junto na mensagem */
-    history.push(msgF);
-    /* timings exatos do llama: tk/s real e contexto usado */
-    if(fin){
-      drawTps(fin.predicted_per_second);
-      ctxBase=(fin.prompt_n||0)+(fin.predicted_n||0);
-      drawCtx(ctxBase);
-    }else if(nTok){
-      drawTps(nTok/((performance.now()-t0)/1000));
-      ctxBase+=nTok; drawCtx(ctxBase);
-    }
+    paraPens();
+    var calls=tcAcc.filter(function(a){ return a&&a.function&&a.function.name; })
+      .map(function(a){
+        autoId++;
+        return {id:a.id||("call_"+autoId),type:"function",
+                function:{name:a.function.name,
+                          arguments:a.function.arguments||"{}"}};
+      });
+    body.innerHTML=fmt(acc||(calls.length?"chamando ferramentas…":""));
+    return {fim:"fim",body:body,mEl:mEl,acc:acc,pens:pens,calls:calls,
+            fin:fin,nTok:nTok,elapsed:(performance.now()-t0)/1000};
   }catch(err){
-    clearInterval(tick);
     if(err&&err.name==="AbortError"){
+      paraPens();
       body.innerHTML=fmt(acc||"(interrompido)");
-      if(acc){
-        var msgI={role:"assistant",content:acc,modelo:nomeGer};
-        if(pens) msgI.pens=pens;
-        history.push(msgI);
-      }
-      if(nTok){ ctxBase+=nTok; drawCtx(ctxBase); }
-    }else{
-      setStatus(false);
-      drawTps(0);
-      body.parentNode.className="msg bot error";
-      body.innerHTML=fmt(
-        "não falei com "+MODEL+" em "+base()+"\n"+
-        "suba o servidor:  llama-server -m modelo.gguf --port "+PORTA+
-        "\n("+((err&&err.message)||err)+")"
-      );
-      history.pop();
+      return {fim:"aborto",body:body,mEl:mEl,acc:acc,pens:pens,calls:[],
+              nTok:nTok,elapsed:(performance.now()-t0)/1000};
     }
+    setStatus(false);
+    drawTps(0);
+    body.parentNode.className="msg bot error";
+    body.innerHTML=fmt(
+      "não falei com "+MODEL+" em "+base()+"\n"+
+      "suba o servidor:  llama-server -m modelo.gguf --port "+PORTA+
+      "\n("+((err&&err.message)||err)+")"
+    );
+    paraPens();
+    return {fim:"erro",body:body,mEl:mEl,acc:acc,pens:pens,calls:[],
+            nTok:nTok,err:err};
   }finally{
     clearInterval(tick);
-    if(pens){          /* parou de pensar: bolinha fica fixa e clicável */
-      pensFim=true;
-      var pf=mEl.querySelector(".who .pt");
-      if(pf) pf.classList.remove("piscando");
-      mEl.pensamento=pens;
+  }
+}
+
+async function send(){
+  var text=input.value.trim();
+  if(busy) return;
+  /* esperando leitura/extracao de anexo? (chip "lendo…" visivel) */
+  if(anexos.some(function(a){ return a.estado==="lendo"; })) return;
+  var prontos=anexos.filter(function(a){ return a.estado==="ok"; });
+  if(!text && !prontos.length) return;
+  busy=true; sendBtn.textContent="parar";   /* trava ja: o pend leva um instante */
+  fetchModel();
+  input.value=""; input.style.height="44px";
+  var um=montarUsuario(text,prontos);
+  addMsg("user",text,um.html);
+  history.push({role:"user",content:um.content});
+  limparAnexos();
+  /* estado salvo ANTES do stream, com as imagens: refresh nao perde nada */
+  try{ await gravaPend(); }catch(e){}
+  gera();
+}
+/* so a geracao: usado pelo envio normal e pela retomada pos-refresh */
+async function gera(){
+  busy=true; sendBtn.textContent="parar";   /* send ja travou; retomar passa por aqui */
+  await fetchModel();                       /* nome fresco: o balao nasce com ele */
+  var nomeGer=MODEL;
+  controller=new AbortController();         /* um parar mata stream E ferramentas */
+  var extras=[], rodada=0;                  /* troca de tools desta geração */
+  try{
+    while(true){
+      var r=await umaRodada(nomeGer,extras,controller);
+      if(r.fim==="erro"){
+        if(rodada===0) history.pop();   /* nada foi aceito: tira a msg do usuário */
+        break;
+      }
+      if(r.fim==="aborto"){
+        if(r.acc){                       /* parou no meio: salva o que saiu */
+          var msgI={role:"assistant",content:r.acc,modelo:nomeGer};
+          if(r.pens) msgI.pens=r.pens;
+          history.push(msgI);
+        }
+        if(r.nTok){ ctxBase+=r.nTok; drawCtx(ctxBase); }
+        break;
+      }
+      /* timings exatos do llama: tk/s real e contexto usado */
+      if(r.fin){
+        drawTps(r.fin.predicted_per_second);
+        ctxBase=(r.fin.prompt_n||0)+(r.fin.predicted_n||0);
+        drawCtx(ctxBase);
+      }else if(r.nTok){
+        drawTps(r.nTok/(r.elapsed||1));
+        ctxBase+=r.nTok; drawCtx(ctxBase);
+      }
+      if(r.calls.length && rodada<5){     /* modelo pediu ferramenta */
+        extras.push({role:"assistant",content:r.acc||"",tool_calls:r.calls});
+        var resps=await executaTools(r.calls,controller.signal);
+        if(resps===null){                 /* parou durante as ferramentas */
+          if(r.acc){
+            var msgP={role:"assistant",content:r.acc,modelo:nomeGer};
+            if(r.pens) msgP.pens=r.pens;
+            history.push(msgP);
+          }
+          break;
+        }
+        extras.push.apply(extras,resps);
+        rodada++;
+        continue;                         /* volta pro modelo com os resultados */
+      }
+      /* rodada final: resposta comum pro histórico */
+      var accF=r.acc||"(resposta vazia)";
+      r.body.innerHTML=fmt(accF);
+      var msgF={role:"assistant",content:accF,modelo:nomeGer};
+      if(r.pens) msgF.pens=r.pens;   /* o que ele pensou vai junto na mensagem */
+      history.push(msgF);
+      break;
     }
+  }finally{
     busy=false; controller=null; sendBtn.textContent="enviar";
     log.scrollTop=log.scrollHeight;
     apagaPend();     /* terminou (completo/parado/erro): nada a retomar */
@@ -1157,6 +1341,7 @@ async function mcpAplicar(){
     }
     MCPJ={servers:j.servers||[]};
     mcpSync();
+    carregaTools();          /* tools novas na hora pro modelo ver */
     mcpnote.innerHTML="salvo · backup: "+esc(j.backup||"—")+
       " · processos já aplicados";
     mcpres.className="res ok";
@@ -1847,7 +2032,7 @@ cfgpathEl.addEventListener("change",aplicarCaminho);
 /* ---------- boot ---------- */
 async function boot(){
   loadPort();
-  ping(); fetchModel();   /* online + nome do modelo ja no carregamento */
+  ping(); fetchModel(); carregaTools();   /* online + nome + tools mcp */
   setInterval(function(){ ping(); fetchModel(); },8000); /* acompanha troca de .gguf */
   await carregarChats();  /* IDB primeiro: conversas COM imagens */
   novaSessao();
