@@ -148,6 +148,10 @@
   }
   #pensov .modal{width:min(720px,100%);height:min(80vh,760px)}
   #pensov .mhead .x{margin-left:auto}
+  #toolov .modal{width:min(720px,100%);height:min(80vh,760px)}
+  #toolov .mhead .x{margin-left:auto}
+  #tooltxt pre{background:var(--fg);color:var(--bg);padding:9px 11px;
+    overflow-x:auto;font-size:13px;white-space:pre-wrap;word-break:break-word}
   .pens{white-space:pre-wrap;word-break:break-word;padding:14px 18px;
         font-size:13.5px;line-height:1.7}
 
@@ -405,6 +409,17 @@
       <button class="x" id="pensclose" title="fechar">✕</button>
     </div>
     <div class="mbody"><div class="pens" id="penstxt"></div></div>
+  </div>
+</div>
+
+<div class="ov" id="toolov">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="detalhe da chamada">
+    <div class="mhead">
+      <h2>chamada</h2>
+      <span class="hcnt" id="toolstat"></span>
+      <button class="x" id="toolclose" title="fechar">✕</button>
+    </div>
+    <div class="mbody"><div class="pens" id="tooltxt"></div></div>
   </div>
 </div>
 
@@ -1031,9 +1046,13 @@ async function executaTools(calls,signal){
     var det=String((c.function&&c.function.arguments)||"{}");
     var mostra=det.length>160?det.slice(0,160)+"…":det;
     var f=ferrMsg(fname,mostra);
+    f.el.chamada={ferramenta:fname,servidor:"",estado:"chamando…",
+                  args:det,resultado:""};
     var mapa=TOOLMAP[fname];
     if(!mapa){
       f.ft.textContent=mostra+"\n✗ ferramenta desconhecida";
+      f.el.chamada.estado="desconhecida";
+      f.el.chamada.resultado="ferramenta desconhecida: "+fname;
       resps.push(toolErr(c.id,"ferramenta desconhecida: "+fname+
         " — disponíveis: "+(Object.keys(TOOLMAP).join(", ")||"(nenhuma)")));
       continue;
@@ -1042,9 +1061,12 @@ async function executaTools(calls,signal){
     try{ args=JSON.parse(det||"{}"); }
     catch(e){
       f.ft.textContent=mostra+"\n✗ arguments não é JSON válido";
+      f.el.chamada.estado="args inválidos";
+      f.el.chamada.resultado="arguments não é JSON válido: "+det.slice(0,300);
       resps.push(toolErr(c.id,"arguments não é JSON válido: "+det.slice(0,300)));
       continue;
     }
+    f.el.chamada.servidor=mapa.servidor||"";
     f.ft.textContent=mostra+"\n→ executando…";
     try{
       var r=await fetch("/api/tool",{method:"POST",
@@ -1056,12 +1078,16 @@ async function executaTools(calls,signal){
         /* uso.pedir_fora: caminho fora da base — popup por chamada */
         var pergun=j.pergunta||("fora da base:\n- "+(j.fora||[]).join("\n- "));
         f.ft.textContent=mostra+"\n… aguardando confirmação";
+        f.el.chamada.estado="aguardando confirmação";
         var okc=false;
         try{ okc=window.confirm("mcp "+mapa.servidor+" · "+mapa.name+
                                "\n\n"+pergun); }
         catch(e2){ okc=false; }
         if(!okc){
           f.ft.textContent=mostra+"\n✗ recusado por você";
+          f.el.chamada.estado="recusada por você";
+          f.el.chamada.resultado="usuário recusou: fora da base ("+
+            (j.fora||[]).join(", ")+")";
           resps.push(toolErr(c.id,"usuário recusou: fora da base ("+
             (j.fora||[]).join(", ")+")"));
           continue;
@@ -1075,19 +1101,27 @@ async function executaTools(calls,signal){
       }
       if(!r.ok){
         f.ft.textContent=mostra+"\n✗ "+(j.erro||("HTTP "+r.status));
+        f.el.chamada.estado="erro";
+        f.el.chamada.resultado="erro: "+(j.erro||("HTTP "+r.status));
         resps.push(toolErr(c.id,"erro: "+(j.erro||("HTTP "+r.status))));
         continue;
       }
       var txt=toolTexto(j.resultado);
       f.ft.textContent=mostra+"\n✓ "+(txt.length>200?txt.slice(0,200)+"…":txt)+
         (j.reiniciado?" · (mcp reiniciado)":"");
+      f.el.chamada.estado="ok"+(j.reiniciado?" · mcp reiniciado":"");
+      f.el.chamada.resultado=txt;
       resps.push({role:"tool",tool_call_id:c.id,content:txt});
     }catch(e){
       if(e&&e.name==="AbortError"){
         f.ft.textContent=mostra+"\n⏹ interrompido";
+        f.el.chamada.estado="interrompida";
+        f.el.chamada.resultado="(interrompido pelo usuário)";
         return null;
       }
       f.ft.textContent=mostra+"\n✗ "+((e&&e.message)||e);
+      f.el.chamada.estado="falha";
+      f.el.chamada.resultado="falha: "+((e&&e.message)||e);
       resps.push(toolErr(c.id,"falha: "+((e&&e.message)||e)));
     }
   }
@@ -1391,6 +1425,31 @@ document.addEventListener("keydown",function(e){
   if(e.key==="Escape"&&pensov.classList.contains("open")) fechaPens();
 });
 
+/* ================= detalhe da chamada de ferramenta ================= */
+var toolov=$("#toolov"), tooltxt=$("#tooltxt"), toolstat=$("#toolstat");
+function toolDetalhe(c){
+  var args=c.args||"{}";
+  try{ args=JSON.stringify(JSON.parse(args),null,2); }catch(e){}
+  return '<div style="opacity:.65;margin-bottom:8px">'+esc(c.ferramenta||"?")+
+    (c.servidor?" · "+esc(c.servidor):"")+"</div>"+
+    '<div style="opacity:.6;font-size:12px">args</div>'+
+    "<pre>"+esc(args)+"</pre>"+
+    '<div style="opacity:.6;font-size:12px;margin-top:8px">resultado</div>'+
+    "<pre>"+esc(c.resultado||"(sem resultado)")+"</pre>";
+}
+function abreTool(el){
+  var c=el.chamada||{};
+  toolstat.textContent=c.estado||"";
+  tooltxt.innerHTML=toolDetalhe(c);
+  toolov.classList.add("open");
+}
+function fechaTool(){ toolov.classList.remove("open"); }
+$("#toolclose").addEventListener("click",fechaTool);
+toolov.addEventListener("click",function(e){ if(e.target===toolov) fechaTool(); });
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&toolov.classList.contains("open")) fechaTool();
+});
+
 /* ================= config de mcp ================= */
 var mcpov=$("#mcpov"), mcpbody=$("#mcpbody"), mcpjson=$("#mcpjson"),
     mcpnote=$("#mcpnote"), mcpres=$("#mcpres"), mcpstat=$("#mcpstat"),
@@ -1627,6 +1686,7 @@ log.addEventListener("click",function(e){
   if(!t||t.tagName==="IMG"||(t.closest&&t.closest("a"))) return;   /* link/imagem têm ação própria */
   var el=t.closest?t.closest(".msg"):null;
   if(el&&el.pensamento) abrePens(el);      /* só abre se essa resposta pensou */
+  else if(el&&el.chamada) abreTool(el);    /* balão de ferramenta: detalhe */
 });
 
 /* ================= histórico de conversas ================= */
