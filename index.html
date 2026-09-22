@@ -1789,6 +1789,8 @@ mcpbody.addEventListener("change",function(e){
 /* ================= comandos permitidos (uso.permitidos) ================= */
 var usov=$("#usov"), usobody=$("#usobody"), usostat=$("#usostat");
 var USO_I=-1, USO_LIST=[], USO_NEG=[];
+/* padrões do app (mesmos do _mcp_padroes no server.py): mostram, não saem */
+var USO_FIXOS=["rm", "sudo", "su", "passwd"];
 function abreUso(i){
   var s=MCPJ.servers[i];
   if(!s) return;
@@ -1800,22 +1802,26 @@ function abreUso(i){
   pintaUso();
   usov.classList.add("open");
 }
-function usoItens(list,atrib,atribRm){
+function usoItens(list,atrib,atribRm,fixos){
   return list.map(function(p,k){
+    var travado=fixos&&fixos.indexOf(p)>=0;
     return '<div class="mrow"><input class="f" data-'+atrib+'="'+k+'" value="'+
       esc(p)+'" aria-label="comando" style="flex:1">'+
-      '<button class="mini" data-'+atribRm+'="'+k+'" title="remover">✕</button></div>';
+      (travado?'<span style="opacity:.5;font-size:11px" title="padrão do app">fixo</span>'
+              :'<button class="mini" data-'+atribRm+'="'+k+'" title="remover">✕</button>')+
+      "</div>";
   }).join("");
 }
 function pintaUso(){
   var h='<div style="opacity:.6;font-size:12px;margin:8px 0 2px">'+
     "liberados — comando exato, sem pedir</div>";
-  h+=USO_LIST.length?usoItens(USO_LIST,"uoi","uorm")
+  h+=USO_LIST.length?usoItens(USO_LIST,"uoi","uorm",null)
     :'<div style="padding:6px 4px;opacity:.7;font-size:13px">'+
      "nenhum — tudo fora da base pede confirmação</div>";
   h+='<div style="opacity:.6;font-size:12px;margin:8px 0 2px">'+
-    "sempre pedir — começo do comando, até dentro da base</div>";
-  h+=USO_NEG.length?usoItens(USO_NEG,"unoi","unorm")
+    "sempre pedir — começo do comando, até dentro da base "+
+    '<button class="mini" data-usoaddn title="adicionar">+</button></div>';
+  h+=USO_NEG.length?usoItens(USO_NEG,"unoi","unorm",USO_FIXOS)
     :'<div style="padding:6px 4px;opacity:.7;font-size:13px">vazio</div>';
   usobody.innerHTML=h;
 }
@@ -1825,10 +1831,12 @@ function despejaUso(){
   if(!s.uso||typeof s.uso!=="object") s.uso={};
   var limpa=USO_LIST.map(function(p){ return String(p); }).filter(
     function(p){ return p.trim()!==""; });
+  limpa=limpa.filter(function(p,i){ return limpa.indexOf(p)===i; });
   if(limpa.length) s.uso.permitidos=limpa;
   else delete s.uso.permitidos;
   var limpaN=USO_NEG.map(function(p){ return String(p); }).filter(
     function(p){ return p.trim()!==""; });
+  limpaN=limpaN.filter(function(p,i){ return limpaN.indexOf(p)===i; });
   s.uso.sempre_pedir=limpaN;   /* sempre gravado: vazio = desligado */
   mcpSync();
   return true;
@@ -1854,6 +1862,14 @@ usobody.addEventListener("input",function(e){
   if(kn!==null&&kn!==undefined){ USO_NEG[+kn]=e.target.value; return; }
 });
 usobody.addEventListener("click",function(e){
+  var an=e.target.getAttribute&&e.target.getAttribute("data-usoaddn");
+  if(an!==null&&an!==undefined){
+    USO_NEG.push("");
+    pintaUso();
+    var ins=usobody.querySelectorAll("input[data-unoi]");
+    if(ins.length) ins[ins.length-1].focus();
+    return;
+  }
   var r=e.target.getAttribute&&e.target.getAttribute("data-uorm");
   if(r!==null&&r!==undefined){ USO_LIST.splice(+r,1); pintaUso(); return; }
   var rn=e.target.getAttribute&&e.target.getAttribute("data-unorm");
