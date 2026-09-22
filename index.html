@@ -81,7 +81,10 @@
   .msg.bot{align-self:flex-start;background:var(--bg);color:var(--fg)}
   .msg.ferr{opacity:.85;font-size:12.5px;border-style:dashed;max-width:min(560px,88%)}
   .msg.error{border-style:dashed}
-  .msg pre{background:var(--fg);color:var(--bg);padding:9px 11px;margin:7px 0 2px;overflow-x:auto;font-size:13px;white-space:pre}
+  .msg pre{background:var(--fg);color:var(--bg);padding:9px 11px;margin:7px 0 2px;overflow-x:auto;font-size:13px;white-space:pre;position:relative}
+  .msg pre code{background:none;padding:0;font-size:inherit}
+  .msg .cp{position:absolute;top:6px;right:6px;font-size:11px;padding:2px 8px;border:1px solid currentColor;background:transparent;color:inherit;opacity:.65;cursor:pointer}
+  .msg .cp:hover{opacity:1}
   .msg .mdh{font-weight:700;margin:8px 0 3px;line-height:1.3}
   .msg .mdh.h1{font-size:17px}.msg .mdh.h2{font-size:16px}
   .msg .mdh.h3{font-size:14.5px}.msg .mdh.h4{font-size:13.5px}
@@ -825,7 +828,8 @@ function fmt(s){
   function guarda(html){ codes.push(html); return "\ue000"+(codes.length-1)+"\ue001"; }
   var t=esc(s);
   t=t.replace(/```(\w*)\n?([\s\S]*?)```/g,function(_,lang,code){
-    return guarda("<pre>"+code.replace(/^\n/,"").replace(/\n$/,"")+"</pre>");
+    return guarda('<pre><button class="cp" title="copiar código">copiar</button><code>'+
+      code.replace(/^\n/,"").replace(/\n$/,"")+"</code></pre>");
   });
   t=t.replace(/`([^`\n]+)`/g,function(_,code){
     return guarda("<code>"+code+"</code>");
@@ -1526,6 +1530,29 @@ mcpbody.addEventListener("click",function(e){
   mcpSync();
   mcpnote.innerHTML="removido da lista — vale depois de <b>aplicar</b>";
 });
+/* copiar código dos blocos <pre>: captura antes do clique do log */
+document.addEventListener("click",function(e){
+  var b=e.target&&e.target.closest?e.target.closest(".cp"):null;
+  if(!b) return;
+  e.preventDefault(); e.stopPropagation();
+  var pre=b.parentNode, code=pre?pre.querySelector("code"):null;
+  var txt=code?(code.innerText!==undefined?code.innerText:code.textContent):"";
+  function ok(){ b.textContent="copiado ✓";
+    setTimeout(function(){ b.textContent="copiar"; },1200); }
+  function er(){ b.textContent="falhou";
+    setTimeout(function(){ b.textContent="copiar"; },1200); }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(ok,er);
+  }else{
+    try{
+      var ta=document.createElement("textarea");
+      ta.value=txt; ta.style.position="fixed"; ta.style.opacity="0";
+      document.body.appendChild(ta); ta.select();
+      (document.execCommand("copy")?ok:er)();
+      document.body.removeChild(ta);
+    }catch(e2){ er(); }
+  }
+},true);
 log.addEventListener("click",function(e){
   var sel=window.getSelection?String(window.getSelection()):"";
   if(sel&&sel.trim()) return;              /* selecionando texto: não abre */
