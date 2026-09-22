@@ -153,6 +153,15 @@
 
   /* ---------------- config de mcp ---------------- */
   #mcpov{z-index:60}   /* fica por cima do menu, que abre por baixo */
+  /* ---------------- janela de escrever ---------------- */
+  #compov{z-index:55}   /* acima do menu, abaixo do mcp */
+  #compov .modal{width:min(720px,100%);height:min(76vh,720px)}
+  #compov .mhead .x{margin-left:auto}
+  #compov .mbody{display:flex;flex-direction:column;gap:8px;
+                 padding:12px 14px;overflow-y:hidden}
+  #cinput{flex:1;min-height:160px;resize:none}
+  #compov .mfoot .ico{height:34px;width:34px}
+  #input{overflow:hidden}   /* 1 linha só: passou disso, a janela assume */
   #mcpov .modal{width:min(860px,100%);height:min(88vh,900px)}
   #mcpov .mhead .x{margin-left:auto}
   .mcppath{font-size:11px;opacity:var(--mut);max-width:46%;
@@ -323,9 +332,7 @@
 </main>
 
 <footer>
-  <div class="anexos" id="anexos"></div>
   <div class="frow">
-    <button class="ico" id="anexar" title="anexar arquivo (ou arraste / cole)">+</button>
     <textarea id="input" placeholder="escreva… — ou arraste arquivos aqui" rows="1"></textarea>
     <button class="btn" id="send">enviar</button>
     <button class="btn" id="clear" title="novo chat (sessão nova, ctx zerado)">novo</button>
@@ -422,6 +429,25 @@
   </div>
 </div>
 
+<div class="ov" id="compov">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="escrever mensagem">
+    <div class="mhead">
+      <h2>escrever</h2>
+      <button class="x" id="compclose" title="fechar (mantém o rascunho)">✕</button>
+    </div>
+    <div class="mbody">
+      <div class="anexos" id="anexos"></div>
+      <textarea id="cinput" placeholder="escreva… — ou arraste arquivos aqui"
+                aria-label="texto da mensagem"></textarea>
+    </div>
+    <div class="mfoot">
+      <button class="ico" id="anexar" title="anexar arquivo (ou arraste / cole)">+</button>
+      <span class="note" id="compnote">enter envia · shift+enter quebra linha · esc mantém o rascunho</span>
+      <button class="btn" id="csend" style="height:34px;min-width:110px;font-weight:600">enviar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
 "use strict";
@@ -487,6 +513,7 @@ function idbDel(k){
 /* ================= chat ================= */
 var log=$("#log"), empty=$("#empty"), input=$("#input"), sendBtn=$("#send"),
     clearBtn=$("#clear"), dot=$("#dot"), stxt=$("#stxt");
+var compov=$("#compov"), cinput=$("#cinput"), csend=$("#csend");
 
 var history=[], busy=false, controller=null;
 
@@ -782,18 +809,20 @@ document.addEventListener("drop",function(e){
   e.preventDefault();
   mostraDrop(false);
   var dt=e.dataTransfer;
-  if(dt.files&&dt.files.length){ addFiles(dt.files); return; }
+  if(dt.files&&dt.files.length){ addFiles(dt.files); abrirComp(); return; }
   var t=dt.getData?dt.getData("text/plain"):"";
   if(t){
-    var a0=(input.selectionStart==null)?input.value.length:input.selectionStart;
-    var a1=(input.selectionEnd==null)?a0:input.selectionEnd;
-    input.value=input.value.slice(0,a0)+t+input.value.slice(a1);
-    input.focus();
+    var alvo=compAberto()?cinput:input;
+    var a0=(alvo.selectionStart==null)?alvo.value.length:alvo.selectionStart;
+    var a1=(alvo.selectionEnd==null)?a0:alvo.selectionEnd;
+    alvo.value=alvo.value.slice(0,a0)+t+alvo.value.slice(a1);
+    alvo.focus();
+    if(alvo===input) aposInput();
   }
 });
 
 /* ---- colar (print de tela, arquivos do gerenciador) ---- */
-input.addEventListener("paste",function(e){
+function colarArquivos(e){
   var cd=e.clipboardData;
   if(!cd||!cd.items) return;
   var files=[];
@@ -803,11 +832,13 @@ input.addEventListener("paste",function(e){
       if(f) files.push(f);
     }
   }
-  if(files.length){ e.preventDefault(); addFiles(files); }
-});
+  if(files.length){ e.preventDefault(); addFiles(files); abrirComp(); }
+}
+input.addEventListener("paste",colarArquivos);
+cinput.addEventListener("paste",colarArquivos);
 
 /* ---- botao + (arquivo do disco) ---- */
-$("#anexar").addEventListener("click",function(){ fileIn.click(); });
+$("#anexar").addEventListener("click",function(){ abrirComp(); fileIn.click(); });
 fileIn.addEventListener("change",function(){ addFiles(fileIn.files); fileIn.value=""; });
 
 function esc(s){
@@ -1175,16 +1206,36 @@ async function umaRodada(nomeGer,extras,ctl){
   }
 }
 
+/* ---- janela de escrever (hibrida: 1a linha no campo, resto aqui) ---- */
+function compAberto(){ return compov.classList.contains("open"); }
+function abrirComp(){
+  if(compAberto()) return;
+  cinput.value=input.value;
+  compov.classList.add("open");
+  cinput.focus();
+  cinput.selectionStart=cinput.selectionEnd=cinput.value.length;
+}
+function fecharComp(){
+  if(!compAberto()) return;
+  compov.classList.remove("open");
+  input.value=cinput.value;
+  input.style.height="44px";
+}
+function aposInput(){
+  /* passou de 1 linha? a janela assume */
+  input.style.height="44px";
+  if(input.scrollHeight>50) abrirComp();
+}
 async function send(){
-  var text=input.value.trim();
+  var text=(compAberto()?cinput.value:input.value).trim();
   if(busy) return;
   /* esperando leitura/extracao de anexo? (chip "lendo…" visivel) */
   if(anexos.some(function(a){ return a.estado==="lendo"; })) return;
   var prontos=anexos.filter(function(a){ return a.estado==="ok"; });
   if(!text && !prontos.length) return;
-  busy=true; sendBtn.textContent="parar";   /* trava ja: o pend leva um instante */
+  busy=true; sendBtn.textContent="parar"; csend.textContent="parar";   /* trava ja */
   fetchModel();
-  input.value=""; input.style.height="44px";
+  fecharComp(); input.value=""; cinput.value="";
   var um=montarUsuario(text,prontos);
   addMsg("user",text,um.html);
   history.push({role:"user",content:um.content});
@@ -1195,7 +1246,7 @@ async function send(){
 }
 /* so a geracao: usado pelo envio normal e pela retomada pos-refresh */
 async function gera(){
-  busy=true; sendBtn.textContent="parar";   /* send ja travou; retomar passa por aqui */
+  busy=true; sendBtn.textContent="parar"; csend.textContent="parar";   /* send ja travou; retomar passa por aqui */
   await fetchModel();                       /* nome fresco: o balao nasce com ele */
   var nomeGer=MODEL;
   controller=new AbortController();         /* um parar mata stream E ferramentas */
@@ -1249,7 +1300,7 @@ async function gera(){
       break;
     }
   }finally{
-    busy=false; controller=null; sendBtn.textContent="enviar";
+    busy=false; controller=null; sendBtn.textContent="enviar"; csend.textContent="enviar";
     log.scrollTop=log.scrollHeight;
     apagaPend();     /* terminou (completo/parado/erro): nada a retomar */
     salvarSessao();   /* guarda a conversa no histórico (texto + imagens) */
@@ -1263,18 +1314,21 @@ clearBtn.addEventListener("click",function(){
   history=[];
   novaSessao();   /* a conversa ja esta salva no histórico; começa outra */
   limparAnexos();
+  fecharComp(); input.value=""; cinput.value="";
   ctxBase=0; drawCtx(0); drawTps(0);   /* sessão nova: ctx e tk/s do topo zeram */
   log.innerHTML='<div class="empty" id="empty">conversa vazia</div>';
   empty=document.getElementById("empty");
   input.focus();
 });
-/* cresce com o texto (a caixa sobe, ja que o footer fica embaixo).
-   o scrollHeight NAO conta os 2px de borda: sem o +2 a caixa fica curta
-   e a barra de scroll aparece mesmo com conteudo que cabe. */
-input.addEventListener("input",function(){
-  input.style.height="44px";
-  input.style.height=Math.min(input.scrollHeight+2,160)+"px";
+/* campo de 1 linha só: passou disso, a janela de escrever assume */
+input.addEventListener("input",aposInput);
+cinput.addEventListener("keydown",function(e){
+  if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); busy?stop():send(); }
+  else if(e.key==="Escape"){ e.preventDefault(); fecharComp(); }
 });
+compov.addEventListener("click",function(e){ if(e.target===compov) fecharComp(); });
+$("#compclose").addEventListener("click",fecharComp);
+csend.addEventListener("click",function(){ busy?stop():send(); });
 input.addEventListener("keydown",function(e){
   if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); busy?stop():send(); }
 });
