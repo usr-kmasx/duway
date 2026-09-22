@@ -30,6 +30,7 @@ import signal
 import subprocess
 import sys
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -996,6 +997,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_mcp_get()
         if path == "/api/tools":
             return self.api_tools_get()
+        if path in ("/health", "/v1/models", "/slots"):
+            return self.api_llama_get(path)
         return self._json({"erro": "rota desconhecida"}, 404)
 
     def do_POST(self):  # noqa: N802
@@ -1006,6 +1009,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_mcp_post()
         if path == "/api/tool":
             return self.api_tool_post()
+        if path == "/v1/chat/completions":
+            return self.api_llama_chat_post()
         return self._json({"erro": "rota desconhecida"}, 404)
 
     # -- apis -------------------------------------------------------------
@@ -1185,6 +1190,63 @@ class Handler(BaseHTTPRequestHandler):
                     out.append({"servidor": nome, "ativo": True,
                                 "tools": m["tools"]})
         self._json({"servidores": out})
+
+    # -- proxy do llama (o navegador do celular não alcança o 127.0.0.1;
+    # pelo site tudo é mesma origem; o llama continua só-local)
+    def _llama_porta(self):
+        try:
+            qs = parse_qs(urlparse(self.path).query)
+            p = int((qs.get("porta") or ["8080"])[0])
+            if 1 <= p <= 65535:
+                return p
+        except (TypeError, ValueError):
+            pass
+        return 8080
+
+    def _llama_url(self, path):
+        return "http://127.0.0.1:%d%s" % (self._llama_porta(), path)
+
+    def api_llama_get(self, path):
+        try:
+            with urllib.request.urlopen(self._llama_url(path),
+                                        timeout=15) as r:
+                corpo = r.read()
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "llama fora do ar: %s" % e}, 502)
+        return self._send(200, corpo)
+
+    def api_llama_chat_post(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            corpo = self.rfile.read(n)
+        except Exception:  # noqa: BLE001
+            return self._json({"erro": "json invalido"}, 400)
+        req = urllib.request.Request(
+            self._llama_url("/v1/chat/completions"), data=corpo,
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            r = urllib.request.urlopen(req, timeout=600)
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "llama fora do ar: %s" % e}, 502)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            while True:
+                bloco = r.read(1 << 16)
+                if not bloco:
+                    break
+                self.wfile.write(bloco)
+                self.wfile.flush()
+        except Exception:  # noqa: BLE001 (celular fechou no meio)
+            pass
+        finally:
+            try:
+                r.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def api_tool_post(self):
         """executa uma tool: {servidor, name, arguments} -> content do MCP"""

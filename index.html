@@ -589,7 +589,8 @@ function savePort(){
   LS.set("llama.port",PORTA);
   return PORTA;
 }
-function base(){ return "http://127.0.0.1:"+savePort(); }
+function base(){ return ""; }   /* tudo mesma origem: o site proxya o llama (vale no celular) */
+function lport(){ return encodeURIComponent(typeof PORTA!=="undefined"?PORTA:"8080"); }
 function setStatus(ok){
   dot.className="dot"+(ok?" on":"");
   stxt.textContent=ok?"online":"offline";
@@ -597,7 +598,7 @@ function setStatus(ok){
 /* online/offline: sondo o llama direto (/health), nao so na conversa */
 async function ping(){
   try{
-    var r=await fetch(base()+"/health",{cache:"no-store"});
+    var r=await fetch(base()+"/health?porta="+lport(),{cache:"no-store"});
     setStatus(!!r.ok);
   }catch(e){
     setStatus(false);
@@ -618,7 +619,7 @@ function pintaModelo(){
 }
 async function fetchModel(){
   try{
-    var r=await fetch(base()+"/v1/models");
+    var r=await fetch(base()+"/v1/models?porta="+lport());
     if(!r.ok) return;
     var j=await r.json();
     var id=(j.data&&j.data[0]&&(j.data[0].id||j.data[0].name))||
@@ -647,7 +648,7 @@ function drawCtx(used){
 }
 async function fetchCtx(){
   try{
-    var r=await fetch(base()+"/slots");
+    var r=await fetch(base()+"/slots?porta="+lport());
     if(r.ok){
       var j=await r.json();
       var s=Array.isArray(j)?j[0]:j;
@@ -1223,7 +1224,7 @@ async function umaRodada(nomeGer,extras,ctl){
       stream:true
     };
     if(TOOLS.length) payload.tools=TOOLS;   /* modelo pode pedir as tools */
-    var res=await fetch(base()+"/v1/chat/completions",{
+    var res=await fetch(base()+"/v1/chat/completions?porta="+lport(),{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload),
@@ -1310,7 +1311,7 @@ async function umaRodada(nomeGer,extras,ctl){
     drawTps(0);
     body.parentNode.className="msg bot error";
     body.innerHTML=fmt(
-      "não falei com "+MODEL+" em "+base()+"\n"+
+      "não falei com "+MODEL+" (llama em 127.0.0.1:"+PORTA+")\n"+
       "suba o servidor:  llama-server -m modelo.gguf --port "+PORTA+
       "\n("+((err&&err.message)||err)+")"
     );
