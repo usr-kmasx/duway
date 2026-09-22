@@ -1133,7 +1133,7 @@ async function umaRodada(nomeGer,extras,ctl){
   var body=addMsg("bot","",null,nomeGer);
   body.innerHTML='<span class="caret"></span>';
   var mEl=body.parentNode;       /* balão: bolinha e pensamento moram nele */
-  var acc="", nTok=0, fin=null, pens="", pensFim=false;
+  var acc="", nTok=0, nRea=0, fin=null, pens="", pensFim=false;
   var tcAcc=[], autoId=0;
   var t0=performance.now(), tick=null;
   drawTps(0);
@@ -1186,7 +1186,7 @@ async function umaRodada(nomeGer,extras,ctl){
         if(data==="[DONE]"){ done=true; break; }
         try{
           var j=JSON.parse(data), d=j.choices&&j.choices[0]&&j.choices[0].delta;
-          if(j.timings&&j.timings.predicted_per_second) fin=j.timings;
+          if(j.timings) fin=j.timings;   /* vale mesmo com per_second 0 */
           if(d&&d.tool_calls){        /* modelo pedindo ferramenta (fragmentos) */
             d.tool_calls.forEach(function(tc){
               var ix=tc.index||0;
@@ -1209,7 +1209,7 @@ async function umaRodada(nomeGer,extras,ctl){
             body.innerHTML=fmt(acc)+'<span class="caret"></span>';
           }
           else if(d&&(d.reasoning_content||d.thinking)){
-            nTok++;
+            nRea++;   /* pensamento NÃO conta como token (o predicted_n também não conta) */
             if(!pens) poePt(mEl,true);   /* começou a pensar: bolinha piscando */
             pens+=(d.reasoning_content||d.thinking);
             mEl.pensamento=pens;
@@ -1314,9 +1314,15 @@ async function gera(){
         if(r.nTok){ ctxBase+=r.nTok; drawCtx(ctxBase); }
         break;
       }
-      /* timings exatos do llama: tk/s real e contexto usado */
+      /* timings exatos do llama: tk/s real e contexto usado.
+         fin vale mesmo com predicted_per_second 0 (resposta curta): nesse
+         caso a taxa cai pro fallback de chunks, mas o ctx usa prompt_n
+         + predicted_n, que continuam reais. nTok aqui é só conteúdo
+         (pensamento não conta — igual ao predicted_n). */
       if(r.fin){
-        drawTps(r.fin.predicted_per_second);
+        var tps=(r.fin.predicted_per_second>0)?r.fin.predicted_per_second:
+                (r.nTok/(r.elapsed||1));
+        drawTps(tps);
         ctxBase=(r.fin.prompt_n||0)+(r.fin.predicted_n||0);
         drawCtx(ctxBase);
       }else if(r.nTok){
