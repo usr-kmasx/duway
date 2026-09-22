@@ -1,4 +1,5 @@
 .venv/
 cache/
+node/
 __pycache__/
 server.log

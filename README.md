@@ -40,9 +40,11 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 **MCP (aba "outros" → config de mcp)**
 
 - Tela com a lista dos servidores: nome/comando editáveis na hora, ativar/desativar, remover, **+ adicionar**, e editor direto do `~/.config/duway/mcp.json` (escrita atômica + backup `.bak`).
+- **Instalar com um link** (barra de cima): cola `github.com/x/y`, `git+URL`, nome do PyPI ou `@pacote npm` e clica **instalar** (Enter também) — ele **baixa, sobe e confere** (`initialize` + `tools/list`) e **só grava no `mcp.json` se funcionou**; se falhar, mostra o log e não salva nada. Prefixos `npx:`/`uvx:` forçam o runtime, e dá pra colar a linha inteira (`npx -y pacote`).
+- **npm/npx sem node no sistema**: na 1ª instalação npm ele baixa um **node LTS portátil** pra `duway/node/` (~45M baixados, ~210M no disco, gitignored) e o cache do npm fica em `cache/npm/` — nada em `~/.npm`.
 - **Aplicar grava o arquivo e já mata/sobe os processos na hora** — diferente do config do llama, aqui não espera reinício nenhum.
-- Tudo contido na pasta do projeto: `.venv/`, `cache/` (uv, pip, playwright, chromedriver) e `TMPDIR` — nada é instalado no sistema.
-- JSON-RPC por stdio; rotas `GET|POST /api/mcp`, `GET /api/tools` e `POST /api/tool` prontas pro chat usar (o loop de tool_calls fica por sua conta / do modelo).
+- Tudo contido na pasta do projeto: `.venv/`, `cache/` (uv, pip, playwright, chromedriver, npm) e `TMPDIR` — nada é instalado no sistema.
+- JSON-RPC por stdio; rotas `GET|POST /api/mcp`, `POST /api/mcp/instalar`, `GET /api/tools` e `POST /api/tool` prontas pro chat usar (o loop de tool_calls fica por sua conta / do modelo).
 - O chat **envia as tools pro modelo**: ele pede a ferramenta → o site executa via `/api/tool` → devolve `role:"tool"` → resposta final (máx. 5 rodadas; balão tracejado `ferramenta · …` mostra args e resultado; só a resposta final entra no histórico).
 - `bin/google-chrome` é um **shim pro chromium** (o webdriver-manager procura `google-chrome`; sem ele ele baixa o driver errado e a busca vem vazia) e injeta **`--headless`** — sem isso o MCP abre uma janela na tela, e fechar essa janela mata a sessão selenium. Esse PATH vale só pros processos MCP.
 - **Supervisor**: se a sessão selenium morrer (o MCP tem o bug de nunca recriar o driver), o `server.py` reinicia o processo MCP (filho nosso, nunca o llama) e **repete a chamada uma vez** — na UI aparece `· (mcp reiniciado)`.
@@ -58,7 +60,7 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 | arquivo        | papel                                                        |
 | -------------- | ------------------------------------------------------------ |
 | `index.html`   | interface inteira (JS vanilla, IndexedDB, tema, menu, histórico) |
-| `server.py`    | backend stdlib: estático + `GET /api/flags` + `GET\|POST /api/config` + 4 rotas MCP (processos filhos) |
+| `server.py`    | backend stdlib: estático + `GET /api/flags` + `GET\|POST /api/config` + 5 rotas MCP (processos filhos) |
 | `history.png`  | origem do ícone de histórico (vira data-URI)                  |
 
 ## Notas

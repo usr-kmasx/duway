@@ -23,13 +23,16 @@ uso:
 import atexit
 import json
 import os
+import platform
 import queue
 import re
 import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -460,7 +463,7 @@ MCPS_LOCK = threading.Lock()
 
 def _mcp_env(extra=None):
     env = dict(os.environ)
-    for d in ("uv", "pip", "pw", "tmp", "wdm"):
+    for d in ("uv", "pip", "pw", "tmp", "wdm", "npm"):
         (CACHE_DIR / d).mkdir(parents=True, exist_ok=True)
     env["UV_CACHE_DIR"] = str(CACHE_DIR / "uv")
     env["PIP_CACHE_DIR"] = str(CACHE_DIR / "pip")
@@ -468,12 +471,20 @@ def _mcp_env(extra=None):
     env["TMPDIR"] = str(CACHE_DIR / "tmp")
     env["WDM_CACHE"] = str(CACHE_DIR / "wdm")
     env["WDM_LOCAL"] = "1"
+    # npm/npx: cache e resto contidos no projeto (nada em ~/.npm)
+    env["npm_config_cache"] = str(CACHE_DIR / "npm")
+    env["npm_config_update_notifier"] = "false"
+    env["npm_config_audit"] = "false"
+    env["npm_config_fund"] = "false"
     lb = str(HOME / ".local" / "bin")
     if lb not in env.get("PATH", "").split(":"):
         env["PATH"] = lb + ":" + env.get("PATH", "")
     rb = str(ROOT / "bin")   # shim google-chrome -> chromium (só nos processos MCP)
     if rb not in env.get("PATH", "").split(":"):
         env["PATH"] = rb + ":" + env.get("PATH", "")
+    nb = str(ROOT / "node" / "bin")   # node portátil (npx) — baixado na 1a instalação npm
+    if (ROOT / "node").exists() and nb not in env.get("PATH", "").split(":"):
+        env["PATH"] = nb + ":" + env.get("PATH", "")
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
     return env
@@ -534,6 +545,105 @@ def _mcp_novo(spec):
         "tools": [], "seq": 0, "pend": {}, "stderr": [],
         "lock": threading.Lock(),
     }
+
+
+def _mcp_nome_de(tok, runtime):
+    base = tok
+    if runtime == "uvx" and (base.startswith("git+") or "://" in base
+                             or "/" in base):    # git -> ultimo pedaco da url
+        base = base.rstrip("/").split("/")[-1]
+        if base.endswith(".git"):
+            base = base[:-4]
+        base = base.split("#")[0].split("@")[0]
+    elif base.startswith("@"):                   # npm: @escopo/pacote@1.0
+        base = base[1:].split("@")[0].replace("/", "-")
+    else:                                        # pypi: pacote==1.0
+        base = base.split("@")[0].split("==")[0]
+    base = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-").lower()
+    return base or "mcp"
+
+
+def _mcp_parse_entrada(txt):
+    """'colo o link' -> (cmd, args, nome); prefixo npx:/uvx: forca o runtime"""
+    t = (txt or "").strip()
+    if not t:
+        raise ValueError("cole um link ou o nome de um pacote")
+    forcado = None
+    if t.startswith("npx:") or t.startswith("uvx:"):
+        forcado, _, t = t.partition(":")
+        t = t.strip()
+    elif re.match(r"^(npx|uvx)(\s|$)", t):       # linha colada inteira
+        partes = t.split()
+        forcado, t = partes[0], " ".join(partes[1:])
+    if not t:
+        raise ValueError("faltou o link/pacote depois de " + (forcado or ""))
+    eh_git = ("://" in t or t.startswith(("git+", "github.com/", "gitlab.com/",
+                                          "bitbucket.org/"))
+              or bool(re.match(r"^[\w.-]+/[\w.-]+$", t)))
+    runtime = forcado or ("npx" if t.startswith("@") and not eh_git else "uvx")
+    if runtime == "npx":
+        toks = [p for p in t.split() if p not in ("-y", "--yes")]
+        if not toks:
+            raise ValueError("faltou o nome do pacote npm")
+        cmd, args = "npx", ["-y"] + toks
+    else:
+        spec = t
+        if re.match(r"^[A-Za-z][\w+.-]*://", spec) and not spec.startswith("git+"):
+            spec = "git+" + spec
+        elif spec.startswith(("github.com/", "gitlab.com/", "bitbucket.org/")):
+            spec = "git+https://" + spec
+        elif re.match(r"^[\w.-]+/[\w.-]+$", spec):   # usuario/repositorio
+            spec = "git+https://github.com/" + spec
+        toks = spec.split()
+        if not toks:
+            raise ValueError("faltou o link/pacote")
+        cmd, args = "uvx", toks
+    return cmd, args, _mcp_nome_de(toks[0], runtime)
+
+
+def _mcp_node():
+    """node portatil DENTRO do projeto (baixado so na 1a instalacao npm)"""
+    b = ROOT / "node" / "bin"
+    if (b / "npx").exists():
+        return b
+    maq = platform.machine().lower()
+    arq = {"x86_64": "x64", "amd64": "x64",
+           "aarch64": "arm64", "arm64": "arm64"}.get(maq)
+    if not arq:
+        raise ValueError("arquitetura %s sem node portatil" % maq)
+    with urllib.request.urlopen(
+            "https://nodejs.org/dist/index.json", timeout=30) as r:
+        idx = json.loads(r.read().decode("utf-8"))
+    ver = next((v["version"] for v in idx if v.get("lts")), None)
+    if not ver:
+        raise ValueError("nao achei a versao LTS do node")
+    url = ("https://nodejs.org/dist/%s/node-%s-linux-%s.tar.xz"
+           % (ver, ver, arq))
+    td = CACHE_DIR / "tmp"
+    td.mkdir(parents=True, exist_ok=True)
+    tar = td / ("node-%s.tar.xz" % ver)
+    with urllib.request.urlopen(url, timeout=180) as r, open(tar, "wb") as f:
+        while True:
+            bloco = r.read(1 << 20)
+            if not bloco:
+                break
+            f.write(bloco)
+    extra = td / ("node-ex-%s" % ver)
+    shutil.rmtree(extra, ignore_errors=True)
+    extra.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tar) as tf:
+        try:
+            tf.extractall(extra, filter="data")   # python >=3.12
+        except TypeError:                          # python antigo: sem filter
+            tf.extractall(extra)
+    orig = extra / ("node-%s-linux-%s" % (ver, arq))
+    if not (orig / "bin" / "npx").exists():
+        raise ValueError("tarball do node veio estranho (sem bin/npx)")
+    shutil.rmtree(ROOT / "node", ignore_errors=True)
+    os.rename(orig, ROOT / "node")
+    tar.unlink(missing_ok=True)
+    shutil.rmtree(extra, ignore_errors=True)
+    return b
 
 
 def _mcp_chamar(m, metodo, params, timeout=60):
@@ -819,6 +929,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_config_post()
         if path == "/api/mcp":
             return self.api_mcp_post()
+        if path == "/api/mcp/instalar":
+            return self.api_mcp_instalar_post()
         if path == "/api/tool":
             return self.api_tool_post()
         return self._json({"erro": "rota desconhecida"}, 404)
@@ -1017,6 +1129,87 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"ok": True, "path": str(MCP_PATH), "backup": str(bak),
                     "servers": status})
+
+    def api_mcp_instalar_post(self):
+        """'colo o link' -> baixa, sobe, confere (tools/list) e SÓ grava se OK"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            return self._json({"erro": "json invalido"}, 400)
+        try:
+            cmd, args, nome = _mcp_parse_entrada(payload.get("entrada", ""))
+        except ValueError as e:
+            return self._json({"erro": str(e)}, 400)
+
+        texto = '{"servers": []}\n'
+        if MCP_PATH.exists():
+            try:
+                texto = MCP_PATH.read_text(encoding="utf-8")
+            except Exception as e:  # noqa: BLE001
+                return self._json({"erro": "nao li o mcp.json: %s" % e}, 500)
+        try:
+            doc = json.loads(texto or "{}")
+            servers = doc.get("servers") or []
+            if not isinstance(servers, list):
+                raise ValueError("servers nao e lista")
+        except Exception as e:  # noqa: BLE001
+            return self._json({"erro": "mcp.json quebrado (%s) — conserte "
+                                       "na tela antes de instalar" % e}, 400)
+
+        # mesmo cmd+args ja ta na lista? entao so devolve o status dele
+        for s in servers:
+            if s.get("cmd") == cmd and list(s.get("args") or []) == args:
+                st = _mcp_status([s])[0]
+                return self._json({"ok": True, "ja_instalado": True,
+                                   "nome": s.get("nome"),
+                                   "n_tools": len(st.get("tools") or []),
+                                   "tools": st.get("tools") or [],
+                                   "servers": _mcp_status()})
+
+        base, n2 = nome, 1                       # nome repetido -> sufixa
+        while any(s.get("nome") == nome for s in servers):
+            n2 += 1
+            nome = "%s-%d" % (base, n2)
+        spec = {"nome": nome, "cmd": cmd, "args": args, "ativo": True}
+
+        if cmd == "npx":
+            try:
+                _mcp_node()                      # node portatil (so na 1a vez)
+            except Exception as e:  # noqa: BLE001
+                return self._json({"erro": "nao baixei o node: %s" % e}, 500)
+
+        # sonda SEM gravar: sobe o processo, initialize + tools/list
+        m = _mcp_novo(spec)
+        with MCPS_LOCK:
+            MCPS[nome] = m
+        _mcp_subir(m)
+
+        def volta_pra_tras(motivo):
+            log = list(m.get("stderr", []))[-30:]
+            _mcp_matar(m)
+            with MCPS_LOCK:
+                MCPS.pop(nome, None)
+            return self._json({"erro": motivo,
+                               "detalhes": log or [m.get("erro", "") or "?"]},
+                              422)
+
+        if m["status"] != "rodando":
+            return volta_pra_tras("%s nao subiu" % nome)
+        tools = list(m.get("tools", []))
+
+        servers.append(spec)                     # so aqui o arquivo e tocado
+        novo, err = _mcp_validar(json.dumps({"servers": servers}))
+        if err:
+            return volta_pra_tras("config ficaria invalida: %s" % err)
+        try:
+            bak = _mcp_gravar(
+                json.dumps({"servers": novo}, ensure_ascii=False) + "\n")
+        except Exception as e:  # noqa: BLE001
+            return volta_pra_tras("nao gravei: %s" % e)
+        self._json({"ok": True, "path": str(MCP_PATH), "backup": str(bak),
+                    "nome": nome, "n_tools": len(tools), "tools": tools,
+                    "servers": _mcp_status()})
 
     def api_tools_get(self):
         """tools de todos os MCP ativos e rodando (pro chat usar)"""

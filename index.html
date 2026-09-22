@@ -391,6 +391,11 @@
       <button class="x" id="mcpclose" title="fechar">✕</button>
     </div>
     <div class="mbar">
+      <input id="mcpinst" placeholder="cole o link do mcp… (github · pypi · npm)"
+             spellcheck="false" autocomplete="off" style="flex:1;min-width:140px"
+             title="aceita github.com/x/y, git+URL, nome do PyPI, @pacote npm — prefixo npx: ou uvx: força"
+             aria-label="link do mcp">
+      <button class="btn" id="mcpinstbtn" style="height:30px">instalar</button>
       <button class="btn" id="mcpadd" style="height:30px">+ adicionar</button>
       <span class="cnt" id="mcpstat"></span>
     </div>
@@ -1360,6 +1365,44 @@ document.addEventListener("keydown",function(e){
     fechaMcp();
     e.stopImmediatePropagation();   /* não fecha o menu que está por baixo */
   }
+});
+async function mcpInstalar(){
+  var inp=$("#mcpinst"), btn=$("#mcpinstbtn"), v=inp.value.trim();
+  if(!v){ mcpnote.textContent="cole o link ou o nome do pacote primeiro"; return; }
+  btn.disabled=true;
+  mcpres.className="res";
+  mcpnote.innerHTML="instalando <b>"+esc(v)+"</b>… baixa, sobe e confere as tools"+
+    " (1a vez de npm/npx baixa o node, ~45M)";
+  try{
+    var r=await fetch("/api/mcp/instalar",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({entrada:v})});
+    var j=await r.json();
+    if(!r.ok){
+      mcpnote.innerHTML="não instalei: "+esc(j.erro||("erro "+r.status));
+      mcpres.className="res err";
+      mcpres.textContent=(j.detalhes||[]).join("\n")||String(j.erro||"");
+      return;
+    }
+    inp.value="";
+    MCPJ={servers:j.servers||[]};
+    mcpSync();
+    mcppath.textContent=j.path||mcppath.textContent;
+    carregaTools();                      /* tools novas na hora pro modelo ver */
+    var alvo=(j.servers||[]).find(function(s){return s.nome===j.nome;})||{};
+    mcpnote.innerHTML=(j.ja_instalado?"já estava instalado: ":"instalado: ")+
+      "<b>"+esc(j.nome)+"</b> · "+(j.n_tools||0)+" tools · "+
+      esc(alvo.status||"rodando");
+    mcpres.className="res ok";
+    mcpres.textContent=(j.tools||[]).map(function(t){
+      return t.name+": "+String(t.description||"").replace(/\s+/g," ").slice(0,90);
+    }).join("\n");
+  }catch(e){ mcpnote.textContent="erro de rede: "+e; }
+  finally{ btn.disabled=false; }
+}
+$("#mcpinstbtn").addEventListener("click",mcpInstalar);
+$("#mcpinst").addEventListener("keydown",function(e){
+  if(e.key==="Enter"){ e.preventDefault(); mcpInstalar(); }
 });
 $("#mcpadd").addEventListener("click",function(){
   MCPJ.servers.push({nome:"novo-mcp",cmd:"",args:[],ativo:true});
