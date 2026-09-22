@@ -1234,11 +1234,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         try:
+            # linha a linha: read(n) bloquearia até encher 64KB e mataria
+            # o tempo-real (texto, t/s e pensamento ao vivo)
             while True:
-                bloco = r.read(1 << 16)
-                if not bloco:
+                linha = r.readline(1 << 20)
+                if not linha:
                     break
-                self.wfile.write(bloco)
+                self.wfile.write(linha)
                 self.wfile.flush()
         except Exception:  # noqa: BLE001 (celular fechou no meio)
             pass
