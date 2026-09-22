@@ -1392,12 +1392,32 @@ async function mcpInstalar(){
     var alvo=(j.servers||[]).find(function(s){return s.nome===j.nome;})||{};
     mcpnote.innerHTML=(j.ja_instalado?"já estava instalado: ":"instalado: ")+
       "<b>"+esc(j.nome)+"</b> · "+(j.n_tools||0)+" tools · "+
-      esc(alvo.status||"rodando");
+      esc(alvo.status||"rodando")+(j.aviso?" · "+esc(j.aviso):"");
     mcpres.className="res ok";
     mcpres.textContent=(j.tools||[]).map(function(t){
       return t.name+": "+String(t.description||"").replace(/\s+/g," ").slice(0,90);
     }).join("\n");
-  }catch(e){ mcpnote.textContent="erro de rede: "+e; }
+  }catch(e){
+    /* sem confirmação (timeout/rede): resync — talvez tenha instalado sim */
+    mcpnote.innerHTML="não deu pra confirmar ("+esc(String(e))+
+      ") — atualizando a lista…";
+    try{
+      var g=await fetch("/api/mcp"), gj=await g.json();
+      MCPJ={servers:gj.servers||[]}; mcpSync();
+      var chave=v.replace(/^git\+/,"").replace(/^https?:\/\//,"")
+                  .replace(/^[a-z]+:\/\//,"");
+      var tem=(MCPJ.servers||[]).some(function(s){
+        return (s.nome+" "+(s.args||[]).join(" ")).indexOf(chave)>=0; });
+      if(tem){
+        carregaTools();
+        mcpnote.innerHTML="atualizado: <b>"+esc(chave)+
+          "</b> apareceu na lista — a instalação completou do lado do servidor";
+      }else{
+        mcpnote.innerHTML="atualizado: nada na lista — a instalação não "+
+          "finalizou (pode estar em andamento; recarregue em uns segundos)";
+      }
+    }catch(e2){ mcpnote.textContent="erro de rede: "+e; }
+  }
   finally{ btn.disabled=false; }
 }
 $("#mcpinstbtn").addEventListener("click",mcpInstalar);

@@ -587,6 +587,26 @@ def _mcp_parse_entrada(txt):
             raise ValueError("faltou o nome do pacote npm")
         cmd, args = "npx", ["-y"] + toks
     else:
+        partes = t.split()
+        # linha de docs colada com flags: uvx --from X --with Y cmd
+        tem_flag = any(p in ("--from", "--with")
+                       or p.startswith(("--from=", "--with=")) for p in partes)
+        pos, i = [], 0
+        while i < len(partes):
+            p = partes[i]
+            if p in ("--from", "--with"):
+                i += 2
+                continue
+            if p.startswith(("--from=", "--with=")) or p.startswith("-"):
+                i += 1
+                continue
+            pos.append(p)
+            i += 1
+        if tem_flag and not pos:
+            raise ValueError(
+                "--with/--from veio sem o comando que deve rodar — cole só o "
+                "link do repositório, ou a linha completa com o comando depois "
+                "da flag")
         spec = t
         if re.match(r"^[A-Za-z][\w+.-]*://", spec) and not spec.startswith("git+"):
             spec = "git+" + spec
@@ -598,6 +618,7 @@ def _mcp_parse_entrada(txt):
         if not toks:
             raise ValueError("faltou o link/pacote")
         cmd, args = "uvx", toks
+        return cmd, args, _mcp_nome_de(pos[0] if pos else toks[0], runtime)
     return cmd, args, _mcp_nome_de(toks[0], runtime)
 
 
@@ -1180,25 +1201,92 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"erro": "nao baixei o node: %s" % e}, 500)
 
         # sonda SEM gravar: sobe o processo, initialize + tools/list
-        m = _mcp_novo(spec)
-        with MCPS_LOCK:
-            MCPS[nome] = m
-        _mcp_subir(m)
+        def sonda(cmd_s, args_s):
+            ms = _mcp_novo({"nome": nome, "cmd": cmd_s, "args": args_s,
+                            "ativo": True})
+            with MCPS_LOCK:
+                MCPS[nome] = ms
+            _mcp_subir(ms)
+            return ms
+
+        def fecha(ms):
+            _mcp_matar(ms)
+            with MCPS_LOCK:
+                MCPS.pop(nome, None)
+
+        m = sonda(cmd, args)
+        aviso = ""
 
         def volta_pra_tras(motivo):
             log = list(m.get("stderr", []))[-30:]
-            _mcp_matar(m)
-            with MCPS_LOCK:
-                MCPS.pop(nome, None)
+            fecha(m)
             return self._json({"erro": motivo,
                                "detalhes": log or [m.get("erro", "") or "?"]},
                               422)
 
         if m["status"] != "rodando":
-            return volta_pra_tras("%s nao subiu" % nome)
+            texto = "\n".join(list(m.get("stderr", [])))
+            # quando o repo nao e python o uv cita o dir do checkout no erro
+            ck = re.search(r"(/[^\s]*?checkouts/\S+)", texto)
+            dir_ck = ck.group(1).rstrip("\"',)") if ck else ""
+            if cmd == "uvx" and "does not appear to be a Python project" in texto:
+                url = next((a for a in args if "://" in a or a.startswith("git+")),
+                           "")
+                eh_js = bool(url) and dir_ck and os.path.isfile(
+                    os.path.join(dir_ck, "package.json"))
+                eh_go = bool(dir_ck) and os.path.isfile(
+                    os.path.join(dir_ck, "go.mod"))
+                if eh_js:
+                    # escolha do usuario: repo JS -> tenta npx e avisa
+                    try:
+                        _mcp_node()
+                    except Exception as e2:  # noqa: BLE001
+                        fecha(m)
+                        return self._json(
+                            {"erro": "não baixei o node: %s" % e2}, 500)
+                    fecha(m)
+                    i = args.index(url)
+                    extras = [a for a in args[i + 1:] if not a.startswith("-")]
+                    cmd, args = "npx", ["-y", url] + extras
+                    m = sonda(cmd, args)
+                    if m["status"] == "rodando":
+                        aviso = ("o repo não é Python (é Node) — instalei como "
+                                 "npm/npx")
+                    else:
+                        return volta_pra_tras(
+                            "%s não subiu nem como npm/npx" % nome)
+                elif eh_go:
+                    return volta_pra_tras(
+                        "%s é escrito em Go (go.mod): aqui só rodam mcps "
+                        "Python (uvx) e Node (npx), e ele não publica binário "
+                        "— por link não dá pra instalar" % nome)
+                else:
+                    return volta_pra_tras(
+                        "o repo de %s não é projeto Python nem Node (sem "
+                        "pyproject/setup.py/package.json) — não dá pra rodar "
+                        "por uvx/npx" % nome)
+            elif any(k in texto for k in ("Resolved ", "Downloaded ",
+                                          "Prepared ")):
+                return volta_pra_tras(
+                    "%s baixou os pacotes mas o processo não falou MCP "
+                    "(handshake não completou) — o repo pode ser um cliente/"
+                    "CLI em vez de um servidor; veja o log" % nome)
+            else:
+                return volta_pra_tras("%s não subiu" % nome)
         tools = list(m.get("tools", []))
 
-        servers.append(spec)                     # so aqui o arquivo e tocado
+        # dedupe de novo com o cmd final (uvx pode ter virado npx ali em cima)
+        for s in servers:
+            if s.get("cmd") == cmd and list(s.get("args") or []) == args:
+                fecha(m)
+                st = _mcp_status([s])[0]
+                return self._json({"ok": True, "ja_instalado": True,
+                                   "nome": s.get("nome"),
+                                   "n_tools": len(st.get("tools") or []),
+                                   "tools": st.get("tools") or [],
+                                   "servers": _mcp_status()})
+
+        servers.append(m["spec"])                # so aqui o arquivo e tocado
         novo, err = _mcp_validar(json.dumps({"servers": servers}))
         if err:
             return volta_pra_tras("config ficaria invalida: %s" % err)
@@ -1209,7 +1297,7 @@ class Handler(BaseHTTPRequestHandler):
             return volta_pra_tras("nao gravei: %s" % e)
         self._json({"ok": True, "path": str(MCP_PATH), "backup": str(bak),
                     "nome": nome, "n_tools": len(tools), "tools": tools,
-                    "servers": _mcp_status()})
+                    "aviso": aviso, "servers": _mcp_status()})
 
     def api_tools_get(self):
         """tools de todos os MCP ativos e rodando (pro chat usar)"""
