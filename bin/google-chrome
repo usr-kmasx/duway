@@ -1,4 +1,6 @@
 #!/bin/sh
 # shim: o webdriver-manager/chromedriver procuram "google-chrome";
 # aqui só existe chromium — mesma coisa na prática.
-exec /usr/bin/chromium "$@"
+# --headless: o MCP nao passa essa flag e abre janela na tela do usuario;
+# janela visivel = alguem fecha = sessao selenium morre = busca quebra.
+exec /usr/bin/chromium --headless "$@"

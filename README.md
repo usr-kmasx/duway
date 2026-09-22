@@ -44,7 +44,8 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 - Tudo contido na pasta do projeto: `.venv/`, `cache/` (uv, pip, playwright, chromedriver) e `TMPDIR` — nada é instalado no sistema.
 - JSON-RPC por stdio; rotas `GET|POST /api/mcp`, `GET /api/tools` e `POST /api/tool` prontas pro chat usar (o loop de tool_calls fica por sua conta / do modelo).
 - O chat **envia as tools pro modelo**: ele pede a ferramenta → o site executa via `/api/tool` → devolve `role:"tool"` → resposta final (máx. 5 rodadas; balão tracejado `ferramenta · …` mostra args e resultado; só a resposta final entra no histórico).
-- `bin/google-chrome` é um **shim pro chromium** (o webdriver-manager procura `google-chrome`; sem ele ele baixa o driver errado e a busca vem vazia). Esse PATH vale só pros processos MCP.
+- `bin/google-chrome` é um **shim pro chromium** (o webdriver-manager procura `google-chrome`; sem ele ele baixa o driver errado e a busca vem vazia) e injeta **`--headless`** — sem isso o MCP abre uma janela na tela, e fechar essa janela mata a sessão selenium. Esse PATH vale só pros processos MCP.
+- **Supervisor**: se a sessão selenium morrer (o MCP tem o bug de nunca recriar o driver), o `server.py` reinicia o processo MCP (filho nosso, nunca o llama) e **repete a chamada uma vez** — na UI aparece `· (mcp reiniciado)`.
 - O `GET /api/mcp` traz **`log`** — as últimas linhas do stderr de cada MCP, pra diagnosticar quando der erro.
 
 **Visual**

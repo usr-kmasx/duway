@@ -735,7 +735,7 @@ def _mcp_status(servers=None):
                 "ativo": bool(s.get("ativo", True)),
                 "status": m.get("status", "parado"),
                 "erro": m.get("erro", ""),
-                "log": m.get("stderr", [])[-20:],   # últimas linhas do stderr
+                "log": m.get("stderr", [])[-100:],  # últimas linhas do stderr
                 "tools": [
                     {"name": t.get("name", ""),
                      "description": t.get("description", "")}
@@ -1051,15 +1051,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"erro": "servidor nao esta rodando: %s" % nome},
                               409)
 
-        try:
-            res = _mcp_chamar(ref, "tools/call", {
+        def chamar():
+            return _mcp_chamar(ref, "tools/call", {
                 "name": name,
                 "arguments": payload.get("arguments") or {},
             }, timeout=180)
-        except Exception as e:  # noqa: BLE001
-            return self._json({"erro": "falhou ao chamar %s: %s" % (name, e)},
-                              500)
-        self._json({"ok": True, "resultado": res})
+
+        # o web-search-mcp NUNCA recria o driver morto (bug dele: fica com a
+        # referencia antiga; o search engole a excecao e devolve [] , entao o
+        # "invalid session id" aparece so no stderr). Reinicia o processo mcp
+        # (filho NOSSO, nunca o llama) e repete UMA vez.
+        def morta(res=None, inicio=0):
+            if res is not None and "invalid session id" in json.dumps(
+                    res, ensure_ascii=False):
+                return True
+            log = ref.get("stderr", [])
+            cauda = log[inicio:] if len(log) >= inicio else log[-30:]
+            return any("invalid session" in l for l in cauda)
+
+        inicio = len(ref.get("stderr", []))
+        try:
+            res = chamar()
+            reniciar = morta(res, inicio)
+        except Exception:  # noqa: BLE001
+            reniciar = True
+        if reniciar:
+            _mcp_matar(ref)
+            _mcp_subir(ref)
+            try:
+                res = chamar()
+            except Exception as e:  # noqa: BLE001
+                return self._json(
+                    {"erro": "falhou ao chamar %s: %s" % (name, e)}, 500)
+            self._json({"ok": True, "resultado": res, "reiniciado": True})
+            return
+        self._json({"ok": True, "resultado": res, "reiniciado": False})
 
 
 def main():

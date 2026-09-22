@@ -946,7 +946,8 @@ async function executaTools(calls,signal){
         continue;
       }
       var txt=toolTexto(j.resultado);
-      f.ft.textContent=mostra+"\n✓ "+(txt.length>200?txt.slice(0,200)+"…":txt);
+      f.ft.textContent=mostra+"\n✓ "+(txt.length>200?txt.slice(0,200)+"…":txt)+
+        (j.reiniciado?" · (mcp reiniciado)":"");
       resps.push({role:"tool",tool_call_id:c.id,content:txt});
     }catch(e){
       if(e&&e.name==="AbortError"){
