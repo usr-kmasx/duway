@@ -1867,16 +1867,9 @@ function rowHtml(f){
 
 function render(){
   var html="", ti, t, list;
-  for(ti=0;ti<TABS.length;ti++){
-    t=TABS[ti];
-    list=FLAGS.filter(function(f){ return f.tab===t.id; });
-    if(!list.length) continue;
-    html+='<div class="grp" data-tab="'+t.id+'">'+
-      '<div class="gh">'+esc(t.label)+" · "+list.length+"</div>"+
-      list.map(rowHtml).join("")+"</div>";
-  }
-  html+='<div class="grp" data-tab="outros">'+
-    '<div class="gh">outros · 1</div>'+
+  /* a linha do mcp mora DENTRO da aba "Outros" (t.id=geral),
+     nao numa aba falsa separada */
+  var MCPLINHA=
     '<div class="row" data-tab="outros" data-key="mcp" '+
       'data-s="config de mcp servidores mcp.json">'+
       '<div class="fl"><code>mcp</code></div>'+
@@ -1884,8 +1877,16 @@ function render(){
         'style="height:32px;font-weight:600">config de mcp</button></div>'+
       '<div class="dsc">adicionar / remover / ativar servidores MCP '+
         'e editar o <code>mcp.json</code></div>'+
-    '</div>'+
-  '</div>';
+    '</div>';
+  for(ti=0;ti<TABS.length;ti++){
+    t=TABS[ti];
+    list=FLAGS.filter(function(f){ return f.tab===t.id; });
+    if(!list.length) continue;
+    var mcpNoGrupo=(t.id==="geral");
+    html+='<div class="grp" data-tab="'+t.id+'">'+
+      '<div class="gh">'+esc(t.label)+" · "+(list.length+(mcpNoGrupo?1:0))+"</div>"+
+      list.map(rowHtml).join("")+(mcpNoGrupo?MCPLINHA:"")+"</div>";
+  }
   bodyEl.innerHTML=html;
   syncSwitches();
   filter();
@@ -1939,9 +1940,9 @@ function renderTabs(){
   TABS.forEach(function(t){
     var n=FLAGS.filter(function(f){ return f.tab===t.id; }).length;
     if(!n) return;
+    if(t.id==="geral") n++; // conta o botao do mcp que mora nesta aba
     html+='<button class="tab" data-tab="'+t.id+'">'+esc(t.label)+" · "+n+"</button>";
   });
-  html+='<button class="tab" data-tab="outros">outros · 1</button>';
   tabsEl.innerHTML=html;
   tabsEl.addEventListener("click",function(e){
     var b=e.target.closest(".tab"); if(!b) return;

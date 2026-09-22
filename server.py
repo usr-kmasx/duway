@@ -876,8 +876,52 @@ def _mcp_status(servers=None):
     return out
 
 
+# mcps padrao do app: se faltar um no mcp.json o boot volta a coloca-lo
+# (em quem ja existe eu nao mexo — so adiciona o que sumiu)
+MCP_PADROES = (
+    {"nome": "web-search", "cmd": "uvx",
+     "args": ["git+https://github.com/pranavms13/web-search-mcp"],
+     "ativo": True},
+    # pino mcp<2 (o v2 renomeou McpError) + entrada via __main__ (o script
+    # console do pacote faz sys.exit(serve()) sem asyncio.run — sai corrotina
+    # solta e morre); python -m usa o __main__.py, que roda certinho
+    {"nome": "mcp-server-shell", "cmd": "uvx",
+     "args": ["--from", "mcp-server-shell", "--with", "mcp<2",
+              "python", "-m", "mcp_server_shell"],
+     "ativo": True},
+)
+
+
+def _mcp_semeia_padroes():
+    try:
+        if MCP_PATH.exists():
+            doc = json.loads(MCP_PATH.read_text(encoding="utf-8") or "{}")
+            if not isinstance(doc, dict) or not isinstance(doc.get("servers"),
+                                                            list):
+                return                     # arquivo ruim: deixo o boot reclamar
+        else:
+            doc = {"servers": []}
+        servers = doc["servers"]
+        faltou = False
+        for p in MCP_PADROES:
+            if not any(isinstance(s, dict) and s.get("nome") == p["nome"]
+                       for s in servers):
+                servers.append(dict(p))
+                faltou = True
+        if not faltou:
+            return
+        novo, err = _mcp_validar(json.dumps({"servers": servers}))
+        if err:
+            return
+        doc["servers"] = novo
+        _mcp_gravar(json.dumps(doc, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _mcp_boot():
     try:
+        _mcp_semeia_padroes()
         if not MCP_PATH.exists():
             return
         servers, erro = _mcp_validar(MCP_PATH.read_text(encoding="utf-8"))
