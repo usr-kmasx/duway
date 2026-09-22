@@ -460,7 +460,7 @@ MCPS_LOCK = threading.Lock()
 
 def _mcp_env(extra=None):
     env = dict(os.environ)
-    for d in ("uv", "pip", "pw", "tmp", "wdm", "npm"):
+    for d in ("uv", "pip", "pw", "tmp", "wdm"):
         (CACHE_DIR / d).mkdir(parents=True, exist_ok=True)
     env["UV_CACHE_DIR"] = str(CACHE_DIR / "uv")
     env["PIP_CACHE_DIR"] = str(CACHE_DIR / "pip")
@@ -468,20 +468,12 @@ def _mcp_env(extra=None):
     env["TMPDIR"] = str(CACHE_DIR / "tmp")
     env["WDM_CACHE"] = str(CACHE_DIR / "wdm")
     env["WDM_LOCAL"] = "1"
-    # npm/npx: cache e resto contidos no projeto (nada em ~/.npm)
-    env["npm_config_cache"] = str(CACHE_DIR / "npm")
-    env["npm_config_update_notifier"] = "false"
-    env["npm_config_audit"] = "false"
-    env["npm_config_fund"] = "false"
     lb = str(HOME / ".local" / "bin")
     if lb not in env.get("PATH", "").split(":"):
         env["PATH"] = lb + ":" + env.get("PATH", "")
     rb = str(ROOT / "bin")   # shim google-chrome -> chromium (só nos processos MCP)
     if rb not in env.get("PATH", "").split(":"):
         env["PATH"] = rb + ":" + env.get("PATH", "")
-    nb = str(ROOT / "node" / "bin")   # node portátil (npx) — baixado na 1a instalação npm
-    if (ROOT / "node").exists() and nb not in env.get("PATH", "").split(":"):
-        env["PATH"] = nb + ":" + env.get("PATH", "")
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
     return env
