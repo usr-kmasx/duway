@@ -17,6 +17,15 @@ Pré-requisito: um llama-server rodando (porta configurável no menu ☰):
 llama-server -m modelo.gguf --mmproj mmproj.gguf
 ```
 
+### Celular (mesma rede)
+
+```sh
+python3 server.py --host 0.0.0.0
+# o boot mostra a url, ex.: http://192.168.100.9:8787
+```
+
+O chat, o llama (via proxy do site) e os MCPs funcionam no celular sem expor o llama-server. **Sem senha**: só em rede confiável — qualquer um no Wi-Fi abre o site e chama a API. Sem a flag, é só-PC (`127.0.0.1`). Se não abrir: `sudo ufw allow 8787/tcp`, mesmo Wi-Fi (fora dados móveis/VPN/rede de visitas).
+
 ## O que tem
 
 **Conversa**
