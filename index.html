@@ -453,7 +453,7 @@
     <div class="mbody" id="usobody"></div>
     <div class="mfoot">
       <button class="btn" id="usoadd" style="height:34px">+ adicionar</button>
-      <span class="note">comando exato passa sem permissão</span>
+      <span class="note">começo cadastrado passa sem permissão</span>
       <button class="btn" id="usoapply" style="height:34px;min-width:110px;font-weight:600">aplicar</button>
     </div>
   </div>
@@ -1814,7 +1814,7 @@ function usoItens(list,atrib,atribRm,fixos){
 }
 function pintaUso(){
   var h='<div style="opacity:.6;font-size:12px;margin:8px 0 2px">'+
-    "liberados — comando exato, sem pedir</div>";
+    "liberados — começo do comando, sem pedir</div>";
   h+=USO_LIST.length?usoItens(USO_LIST,"uoi","uorm",null)
     :'<div style="padding:6px 4px;opacity:.7;font-size:13px">'+
      "nenhum — tudo fora da base pede confirmação</div>";

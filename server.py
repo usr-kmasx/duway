@@ -894,15 +894,20 @@ def _mcp_comando(arguments):
 
 
 def _mcp_permitido(spec, arguments):
-    """comando exato cadastrado em uso.permitidos passa sem pedir"""
+    """começo cadastrado em uso.permitidos passa sem pedir (prefixo por
+    palavras: 'ls -la' libera 'ls -la ~/x'; 'lsfoo' nunca casa)"""
     uso = spec.get("uso") or {}
     perms = uso.get("permitidos") or []
     if not perms:
         return False
-    cmd = _mcp_comando(arguments).strip()
-    if not cmd:
+    toks = _mcp_comando(arguments).strip().split()
+    if not toks:
         return False
-    return any(cmd == str(p).strip() for p in perms)
+    for p in perms:
+        pt = str(p).strip().split()
+        if pt and toks[:len(pt)] == pt:
+            return True
+    return False
 
 
 def _mcp_sempre_pedir(spec, arguments):
