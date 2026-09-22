@@ -35,7 +35,7 @@ llama-server -m modelo.gguf --mmproj mmproj.gguf
 
 - 254 flags do llama em 9 abas, com busca.
 - Lê e grava `~/.config/llama.cpp/config.ini` (escrita atômica + backup `.bak`).
-- **Aplicar não reinicia o servidor** — o arquivo só vale no próximo boot do llama-server.
+- **Aplicar só grava o arquivo** — o site nunca reinicia o llama-server sozinho. Como o config é lido no startup, **a mudança só vale depois que você reiniciar o llama-server manualmente**.
 
 **Visual**
 
