@@ -391,11 +391,6 @@
       <button class="x" id="mcpclose" title="fechar">✕</button>
     </div>
     <div class="mbar">
-      <input id="mcpinst" placeholder="cole o link do mcp… (github · pypi · npm)"
-             spellcheck="false" autocomplete="off" style="flex:1;min-width:140px"
-             title="aceita github.com/x/y, git+URL, nome do PyPI, @pacote npm — prefixo npx: ou uvx: força"
-             aria-label="link do mcp">
-      <button class="btn" id="mcpinstbtn" style="height:30px">instalar</button>
       <button class="btn" id="mcpadd" style="height:30px">+ adicionar</button>
       <span class="cnt" id="mcpstat"></span>
     </div>
@@ -945,6 +940,27 @@ async function executaTools(calls,signal){
         body:JSON.stringify({servidor:mapa.servidor,name:mapa.name,arguments:args}),
         signal:signal});
       var j=await r.json();
+      if(j&&j.pede_confirmacao){
+        /* uso.pedir_fora: caminho fora da base — popup por chamada */
+        var pergun=j.pergunta||("fora da base:\n- "+(j.fora||[]).join("\n- "));
+        f.ft.textContent=mostra+"\n… aguardando confirmação";
+        var okc=false;
+        try{ okc=window.confirm("mcp "+mapa.servidor+" · "+mapa.name+
+                               "\n\n"+pergun); }
+        catch(e2){ okc=false; }
+        if(!okc){
+          f.ft.textContent=mostra+"\n✗ recusado por você";
+          resps.push(toolErr(c.id,"usuário recusou: fora da base ("+
+            (j.fora||[]).join(", ")+")"));
+          continue;
+        }
+        var r2=await fetch("/api/tool",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({servidor:mapa.servidor,name:mapa.name,
+                               arguments:args,confirmado:true}),
+          signal:signal});
+        r=r2; j=await r2.json();
+      }
       if(!r.ok){
         f.ft.textContent=mostra+"\n✗ "+(j.erro||("HTTP "+r.status));
         resps.push(toolErr(c.id,"erro: "+(j.erro||("HTTP "+r.status))));
@@ -1250,7 +1266,12 @@ function mcpLimpo(x){           /* só o que o arquivo aceita (sem status/tools)
   var o={nome:String(x.nome||""), cmd:String(x.cmd||""),
          args:Array.isArray(x.args)?x.args.slice():[]};
   if(x.env&&typeof x.env==="object"&&!Array.isArray(x.env)) o.env=x.env;
-  if(Array.isArray(x.instalar)&&x.instalar.length) o.instalar=x.instalar.slice();
+  if(x.uso&&typeof x.uso==="object"&&!Array.isArray(x.uso)){
+    var u={};
+    if(typeof x.uso.base==="string") u.base=x.uso.base;
+    if(typeof x.uso.pedir_fora==="boolean") u.pedir_fora=x.uso.pedir_fora;
+    if(Object.keys(u).length) o.uso=u;
+  }
   o.ativo=x.ativo!==false;
   return o;
 }
@@ -1292,6 +1313,21 @@ function mcpPinta(){            /* MCPJ -> lista (não mexe no textarea) */
     }else{
       st='<span class="stt"><span class="pt" style="opacity:.3"></span>não aplicado</span>';
     }
+    /* shell: config de uso (base + pedir fora) editavel na linha */
+    var usoHtml="";
+    if(x.nome==="mcp-server-shell"){
+      var u=x.uso||{};
+      usoHtml='<div class="usorow" data-s="uso base pedir_fora">'+
+        '<span style="opacity:.6;font-size:12px">uso · base</span> '+
+        '<input class="f" data-ub="'+i+'" value="'+esc(u.base||"")+'" '+
+          'placeholder="diretório onde atua" aria-label="base do shell" '+
+          'style="min-width:180px">'+
+        ' <label class="mini" title="perguntar antes de rodar fora da base">'+
+          '<input type="checkbox" data-up="'+i+'"'+
+            (u.pedir_fora?" checked":"")+
+          ' style="vertical-align:middle" aria-label="pedir fora da base"> '+
+          'pedir fora da base</label></div>';
+    }
     return '<div class="mrow">'+
       '<input class="f nm" data-f="nome" data-i="'+i+'" value="'+esc(x.nome||"")+
         '" aria-label="nome do mcp">'+
@@ -1304,6 +1340,7 @@ function mcpPinta(){            /* MCPJ -> lista (não mexe no textarea) */
           ' style="vertical-align:middle" aria-label="ativo"></label>'+
         '<button class="mini" data-rm="'+i+'" title="remover">✕</button>'+
       '</span>'+
+      usoHtml+
     '</div>';
   }).join("");
 }
@@ -1366,68 +1403,10 @@ document.addEventListener("keydown",function(e){
     e.stopImmediatePropagation();   /* não fecha o menu que está por baixo */
   }
 });
-async function mcpInstalar(){
-  var inp=$("#mcpinst"), btn=$("#mcpinstbtn"), v=inp.value.trim();
-  if(!v){ mcpnote.textContent="cole o link ou o nome do pacote primeiro"; return; }
-  btn.disabled=true;
-  mcpres.className="res";
-  mcpnote.innerHTML="instalando <b>"+esc(v)+"</b>… baixa, sobe e confere as tools"+
-    " (1a vez de npm/npx baixa o node, ~45M)";
-  try{
-    var r=await fetch("/api/mcp/instalar",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({entrada:v})});
-    var j=await r.json();
-    if(!r.ok){
-      mcpnote.innerHTML="não instalei: "+esc(j.erro||("erro "+r.status));
-      mcpres.className="res err";
-      mcpres.textContent=(j.detalhes||[]).join("\n")||String(j.erro||"");
-      return;
-    }
-    inp.value="";
-    MCPJ={servers:j.servers||[]};
-    mcpSync();
-    mcppath.textContent=j.path||mcppath.textContent;
-    carregaTools();                      /* tools novas na hora pro modelo ver */
-    var alvo=(j.servers||[]).find(function(s){return s.nome===j.nome;})||{};
-    mcpnote.innerHTML=(j.ja_instalado?"já estava instalado: ":"instalado: ")+
-      "<b>"+esc(j.nome)+"</b> · "+(j.n_tools||0)+" tools · "+
-      esc(alvo.status||"rodando")+(j.aviso?" · "+esc(j.aviso):"");
-    mcpres.className="res ok";
-    mcpres.textContent=(j.tools||[]).map(function(t){
-      return t.name+": "+String(t.description||"").replace(/\s+/g," ").slice(0,90);
-    }).join("\n");
-  }catch(e){
-    /* sem confirmação (timeout/rede): resync — talvez tenha instalado sim */
-    mcpnote.innerHTML="não deu pra confirmar ("+esc(String(e))+
-      ") — atualizando a lista…";
-    try{
-      var g=await fetch("/api/mcp"), gj=await g.json();
-      MCPJ={servers:gj.servers||[]}; mcpSync();
-      var chave=v.replace(/^git\+/,"").replace(/^https?:\/\//,"")
-                  .replace(/^[a-z]+:\/\//,"");
-      var tem=(MCPJ.servers||[]).some(function(s){
-        return (s.nome+" "+(s.args||[]).join(" ")).indexOf(chave)>=0; });
-      if(tem){
-        carregaTools();
-        mcpnote.innerHTML="atualizado: <b>"+esc(chave)+
-          "</b> apareceu na lista — a instalação completou do lado do servidor";
-      }else{
-        mcpnote.innerHTML="atualizado: nada na lista — a instalação não "+
-          "finalizou (pode estar em andamento; recarregue em uns segundos)";
-      }
-    }catch(e2){ mcpnote.textContent="erro de rede: "+e; }
-  }
-  finally{ btn.disabled=false; }
-}
-$("#mcpinstbtn").addEventListener("click",mcpInstalar);
-$("#mcpinst").addEventListener("keydown",function(e){
-  if(e.key==="Enter"){ e.preventDefault(); mcpInstalar(); }
-});
 $("#mcpadd").addEventListener("click",function(){
   MCPJ.servers.push({nome:"novo-mcp",cmd:"",args:[],ativo:true});
   mcpSync();
-  mcpnote.innerHTML="edite <b>nome/comando</b> aqui, ou args/env/instalar no JSON — depois <b>aplicar</b>";
+  mcpnote.innerHTML="edite <b>nome/comando</b> aqui, ou args/env/uso no JSON — depois <b>aplicar</b>";
   var last=mcpbody.querySelectorAll(".mrow input.f.cm");
   if(last.length) last[last.length-1].focus();
 });
@@ -1441,6 +1420,16 @@ mcpjson.addEventListener("input",function(){
   }
 });
 mcpbody.addEventListener("input",function(e){   /* campos da lista -> json */
+  var ub=e.target.getAttribute&&e.target.getAttribute("data-ub");
+  if(ub!==null&&ub!==undefined){            /* base do uso (shell) */
+    var jb=+ub;
+    if(!MCPJ.servers[jb]) return;
+    var ob=MCPJ.servers[jb];
+    if(!ob.uso||typeof ob.uso!=="object") ob.uso={};
+    ob.uso.base=e.target.value;
+    mcpjson.value=mcpTexto();               /* não repinta: perde o foco */
+    return;
+  }
   var f=e.target.getAttribute&&e.target.getAttribute("data-f");
   if(!f) return;
   var i=+(e.target.getAttribute("data-i"));
@@ -1449,6 +1438,16 @@ mcpbody.addEventListener("input",function(e){   /* campos da lista -> json */
   mcpjson.value=mcpTexto();                    /* não repinta: perde o foco */
 });
 mcpbody.addEventListener("change",function(e){
+  var up=e.target.getAttribute&&e.target.getAttribute("data-up");
+  if(up!==null&&up!==undefined){            /* pedir_fora do uso (shell) */
+    var ju=+up;
+    if(!MCPJ.servers[ju]) return;
+    var ou=MCPJ.servers[ju];
+    if(!ou.uso||typeof ou.uso!=="object") ou.uso={};
+    ou.uso.pedir_fora=e.target.checked;
+    mcpSync();
+    return;
+  }
   var t=e.target.getAttribute&&e.target.getAttribute("data-tg");
   if(t===null||t===undefined) return;
   var i=+t;
