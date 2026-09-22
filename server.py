@@ -525,6 +525,11 @@ def _mcp_validar(text):
             return None, "%s: uso.base precisa ser texto" % nome
         if "pedir_fora" in uso and not isinstance(uso["pedir_fora"], bool):
             return None, "%s: uso.pedir_fora precisa ser true/false" % nome
+        if "sempre_pedir" in uso and (
+            not isinstance(uso["sempre_pedir"], list)
+            or any(not isinstance(p, str) for p in uso["sempre_pedir"])
+        ):
+            return None, "%s: uso.sempre_pedir precisa ser lista de texto" % nome
         if "permitidos" in uso and (
             not isinstance(uso["permitidos"], list)
             or any(not isinstance(p, str) for p in uso["permitidos"])
@@ -781,7 +786,8 @@ def _mcp_padroes():
          "args": ["--from", "mcp-server-shell", "--with", "mcp<2",
                   "python", "-m", "mcp_server_shell"],
          "ativo": True,
-         "uso": {"base": str(ROOT), "pedir_fora": True}},
+         "uso": {"base": str(ROOT), "pedir_fora": True,
+                 "sempre_pedir": ["rm", "sudo", "su", "passwd"]}},
     ]
 
 
@@ -806,6 +812,13 @@ def _mcp_semeia_padroes():
             elif "uso" in p and not isinstance(acha.get("uso"), dict):
                 acha["uso"] = dict(p["uso"])
                 mudou = True
+            elif "uso" in p and isinstance(acha.get("uso"), dict):
+                # completa chaves ausentes (ex.: sempre_pedir) sem mexer
+                # no que já existe — lista presente, mesmo vazia, é respeitada
+                for k, v in p["uso"].items():
+                    if k not in acha["uso"]:
+                        acha["uso"][k] = json.loads(json.dumps(v))
+                        mudou = True
         if not mudou:
             return
         novo, err = _mcp_validar(json.dumps({"servers": servers}))
@@ -890,6 +903,23 @@ def _mcp_permitido(spec, arguments):
     if not cmd:
         return False
     return any(cmd == str(p).strip() for p in perms)
+
+
+def _mcp_sempre_pedir(spec, arguments):
+    """começo de comando perigoso (uso.sempre_pedir, prefixo por palavras)
+    pede confirmação até dentro da base"""
+    uso = spec.get("uso") or {}
+    negs = uso.get("sempre_pedir") or []
+    if not negs:
+        return False
+    toks = _mcp_comando(arguments).strip().split()
+    if not toks:
+        return False
+    for p in negs:
+        pt = str(p).strip().split()
+        if pt and toks[:len(pt)] == pt:
+            return True
+    return False
 
 
 def _mcp_boot():
@@ -1186,8 +1216,20 @@ class Handler(BaseHTTPRequestHandler):
         args = payload.get("arguments") or {}
         # uso.pedir_fora: caminho fora da base so com confirmado:true.
         # uso.permitidos: comando exato cadastrado passa sem pedir.
+        # uso.sempre_pedir: começo perigoso pede até dentro da base.
         fora = [] if _mcp_permitido(ref["spec"], args) \
             else _mcp_caminhos_fora(ref["spec"], args)
+        if not fora and not payload.get("confirmado") and \
+                _mcp_sempre_pedir(ref["spec"], args):
+            base = _mcp_uso_base(ref["spec"])
+            return self._json({
+                "erro": "comando sensível",
+                "pede_confirmacao": True,
+                "base": base,
+                "fora": [],
+                "pergunta": ("comando sensível (sempre pede):\n- %s\n\n"
+                             "base: %s\n\nexecuta mesmo assim?"
+                             % (_mcp_comando(args)[:200], base))}, 409)
         if fora and not payload.get("confirmado"):
             base = _mcp_uso_base(ref["spec"])
             return self._json({

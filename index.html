@@ -1597,6 +1597,8 @@ function mcpLimpo(x){           /* só o que o arquivo aceita (sem status/tools)
     if(typeof x.uso.pedir_fora==="boolean") u.pedir_fora=x.uso.pedir_fora;
     if(Array.isArray(x.uso.permitidos)) u.permitidos=x.uso.permitidos.filter(
       function(p){ return typeof p==="string"; }).slice();
+    if(Array.isArray(x.uso.sempre_pedir)) u.sempre_pedir=x.uso.sempre_pedir.filter(
+      function(p){ return typeof p==="string"; }).slice();
     if(Object.keys(u).length) o.uso=u;
   }
   o.ativo=x.ativo!==false;
@@ -1786,28 +1788,36 @@ mcpbody.addEventListener("change",function(e){
 });
 /* ================= comandos permitidos (uso.permitidos) ================= */
 var usov=$("#usov"), usobody=$("#usobody"), usostat=$("#usostat");
-var USO_I=-1, USO_LIST=[];
+var USO_I=-1, USO_LIST=[], USO_NEG=[];
 function abreUso(i){
   var s=MCPJ.servers[i];
   if(!s) return;
   USO_I=i;
   var u=s.uso||{};
   USO_LIST=Array.isArray(u.permitidos)?u.permitidos.slice():[];
+  USO_NEG=Array.isArray(u.sempre_pedir)?u.sempre_pedir.slice():[];
   usostat.textContent=s.nome||"";
   pintaUso();
   usov.classList.add("open");
 }
-function pintaUso(){
-  if(!USO_LIST.length){
-    usobody.innerHTML='<div style="padding:14px 4px;opacity:.7;font-size:13px">'+
-      "nenhum — tudo fora da base pede confirmação</div>";
-    return;
-  }
-  usobody.innerHTML=USO_LIST.map(function(p,k){
-    return '<div class="mrow"><input class="f" data-uoi="'+k+'" value="'+
-      esc(p)+'" aria-label="comando permitido" style="flex:1">'+
-      '<button class="mini" data-uorm="'+k+'" title="remover">✕</button></div>';
+function usoItens(list,atrib,atribRm){
+  return list.map(function(p,k){
+    return '<div class="mrow"><input class="f" data-'+atrib+'="'+k+'" value="'+
+      esc(p)+'" aria-label="comando" style="flex:1">'+
+      '<button class="mini" data-'+atribRm+'="'+k+'" title="remover">✕</button></div>';
   }).join("");
+}
+function pintaUso(){
+  var h='<div style="opacity:.6;font-size:12px;margin:8px 0 2px">'+
+    "liberados — comando exato, sem pedir</div>";
+  h+=USO_LIST.length?usoItens(USO_LIST,"uoi","uorm")
+    :'<div style="padding:6px 4px;opacity:.7;font-size:13px">'+
+     "nenhum — tudo fora da base pede confirmação</div>";
+  h+='<div style="opacity:.6;font-size:12px;margin:8px 0 2px">'+
+    "sempre pedir — começo do comando, até dentro da base</div>";
+  h+=USO_NEG.length?usoItens(USO_NEG,"unoi","unorm")
+    :'<div style="padding:6px 4px;opacity:.7;font-size:13px">vazio</div>';
+  usobody.innerHTML=h;
 }
 function despejaUso(){
   var s=MCPJ.servers[USO_I];
@@ -1817,6 +1827,9 @@ function despejaUso(){
     function(p){ return p.trim()!==""; });
   if(limpa.length) s.uso.permitidos=limpa;
   else delete s.uso.permitidos;
+  var limpaN=USO_NEG.map(function(p){ return String(p); }).filter(
+    function(p){ return p.trim()!==""; });
+  s.uso.sempre_pedir=limpaN;   /* sempre gravado: vazio = desligado */
   mcpSync();
   return true;
 }
@@ -1836,14 +1849,15 @@ async function usoAplicar(){
 }
 usobody.addEventListener("input",function(e){
   var k=e.target.getAttribute&&e.target.getAttribute("data-uoi");
-  if(k===null||k===undefined) return;
-  USO_LIST[+k]=e.target.value;
+  if(k!==null&&k!==undefined){ USO_LIST[+k]=e.target.value; return; }
+  var kn=e.target.getAttribute&&e.target.getAttribute("data-unoi");
+  if(kn!==null&&kn!==undefined){ USO_NEG[+kn]=e.target.value; return; }
 });
 usobody.addEventListener("click",function(e){
   var r=e.target.getAttribute&&e.target.getAttribute("data-uorm");
-  if(r===null||r===undefined) return;
-  USO_LIST.splice(+r,1);
-  pintaUso();
+  if(r!==null&&r!==undefined){ USO_LIST.splice(+r,1); pintaUso(); return; }
+  var rn=e.target.getAttribute&&e.target.getAttribute("data-unorm");
+  if(rn!==null&&rn!==undefined){ USO_NEG.splice(+rn,1); pintaUso(); return; }
 });
 $("#usoadd").addEventListener("click",function(){
   USO_LIST.push("");
