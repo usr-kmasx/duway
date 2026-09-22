@@ -44,6 +44,20 @@ CONFIG_PATH = Path(
     os.environ.get("XDG_CONFIG_HOME") or (HOME / ".config")
 ) / "llama.cpp" / "config.ini"
 LISTEN_PORT = int(os.environ.get("DUWAY_PORT") or 8787)
+LISTEN_HOST = os.environ.get("DUWAY_HOST") or "127.0.0.1"
+
+
+def _ip_rede():
+    """ip lan da maquina (p/ mostrar a url do celular); '' se nao der"""
+    try:
+        import socket as _s
+        s = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:  # noqa: BLE001
+        return ""
 
 DEFAULT_CONFIG = """\
 # ~/.config/llama.cpp/config.ini
@@ -1262,7 +1276,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     args = sys.argv[1:]
-    global LISTEN_PORT
+    global LISTEN_PORT, LISTEN_HOST
     if "--dump-flags" in args:
         binary = find_llama_bin()
         if not binary:
@@ -1274,6 +1288,8 @@ def main():
         return 0
     if "--porta" in args:
         LISTEN_PORT = int(args[args.index("--porta") + 1])
+    if "--host" in args:   # ex.: --host 0.0.0.0 (celular na mesma rede)
+        LISTEN_HOST = args[args.index("--host") + 1]
     if "--config" in args:  # soh cria/reescreve o config padrao
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(DEFAULT_CONFIG, encoding="utf-8")
@@ -1281,7 +1297,11 @@ def main():
         return 0
 
     binary = find_llama_bin()
-    print("duway  ->  http://127.0.0.1:%d" % LISTEN_PORT)
+    print("duway  ->  http://%s:%d" % (LISTEN_HOST, LISTEN_PORT))
+    if LISTEN_HOST == "0.0.0.0":
+        ip = _ip_rede()
+        if ip:
+            print("celular->  http://%s:%d  (mesma rede, sem senha!)" % (ip, LISTEN_PORT))
     print("llama  ->  %s" % (binary or "NAO ENCONTRADO"))
     print("config ->  %s" % CONFIG_PATH)
     try:
@@ -1293,7 +1313,7 @@ def main():
     threading.Thread(target=_mcp_boot, daemon=True).start()  # sobe os ativos
 
     try:
-        srv = ThreadingHTTPServer(("127.0.0.1", LISTEN_PORT), Handler)
+        srv = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     except OSError as e:
         if e.errno in (98, 48, 10048):  # endereco em uso
             print(
