@@ -1464,8 +1464,23 @@ function toolResultadoHtml(res){
         link+"</div>";
     }).join("");
   }
-  if(j!==null&&typeof j==="object")
+  if(j!==null&&typeof j==="object"){
+    if(!Array.isArray(j)&&typeof j.content==="string"&&(j.url||j.title)){
+      var u=String(j.url||""), dom=u.replace(/^https?:\/\//i,"").split("/")[0];
+      var plink=/^https?:\/\//i.test(u)
+        ? '<a href="'+esc(u)+'" target="_blank" rel="noopener"'+
+          ' style="font-size:12px">'+esc(u)+"</a>"
+        : esc(u);
+      var tam=(typeof j.length==="number")?j.length:String(j.content).length;
+      return '<div><b>'+esc(j.title||u)+"</b>"+
+        (dom?' <span style="opacity:.6">· '+esc(dom)+"</span>":"")+"</div>"+
+        "<div>"+plink+"</div>"+
+        '<div style="opacity:.6;font-size:12px;margin:6px 0 2px">conteúdo'+
+        " · "+tam+" caracteres</div>"+
+        "<pre>"+esc(j.content)+"</pre>";
+    }
     return "<pre>"+esc(JSON.stringify(j,null,2))+"</pre>";
+  }
   return "<pre>"+esc(t)+"</pre>";
 }
 function abreTool(el){
