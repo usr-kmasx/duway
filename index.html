@@ -154,6 +154,8 @@
     overflow-x:auto;font-size:13px;white-space:pre-wrap;word-break:break-word}
   #permov .modal{width:min(520px,100%);height:auto;max-height:70vh}
   #permov .mhead .x{margin-left:auto}
+  #usov .modal{width:min(560px,100%);height:auto;max-height:70vh}
+  #usov .mhead .x{margin-left:auto}
   .pens{white-space:pre-wrap;word-break:break-word;padding:14px 18px;
         font-size:13.5px;line-height:1.7}
 
@@ -436,6 +438,21 @@
       <button class="btn" id="perm1x" style="height:34px">permitir 1x</button>
       <button class="btn" id="permses" style="height:34px">liberar sessão</button>
       <button class="btn" id="permnao" style="height:34px">recusar</button>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="usov">
+  <div class="modal" role="dialog" aria-modal="true" aria-label="comandos permitidos">
+    <div class="mhead">
+      <h2>permitidos</h2>
+      <span class="hcnt" id="usostat"></span>
+      <button class="x" id="usoclose" title="fechar">✕</button>
+    </div>
+    <div class="mbody" id="usobody"></div>
+    <div class="mfoot">
+      <button class="btn" id="usoadd" style="height:34px">+ adicionar</button>
+      <span class="note">comando exato passa sem permissão — vale depois de <b>aplicar</b></span>
     </div>
   </div>
 </div>
@@ -1576,6 +1593,8 @@ function mcpLimpo(x){           /* só o que o arquivo aceita (sem status/tools)
     var u={};
     if(typeof x.uso.base==="string") u.base=x.uso.base;
     if(typeof x.uso.pedir_fora==="boolean") u.pedir_fora=x.uso.pedir_fora;
+    if(Array.isArray(x.uso.permitidos)) u.permitidos=x.uso.permitidos.filter(
+      function(p){ return typeof p==="string"; }).slice();
     if(Object.keys(u).length) o.uso=u;
   }
   o.ativo=x.ativo!==false;
@@ -1632,7 +1651,9 @@ function mcpPinta(){            /* MCPJ -> lista (não mexe no textarea) */
           '<input type="checkbox" data-up="'+i+'"'+
             (u.pedir_fora?" checked":"")+
           ' style="vertical-align:middle" aria-label="pedir fora da base"> '+
-          'pedir fora da base</label></div>';
+          'pedir fora da base</label> '+
+          '<button class="mini" data-uso="'+i+'" '+
+            'title="comandos permitidos sem permissão">permitidos…</button></div>';
     }
     return '<div class="mrow">'+
       '<input class="f nm" data-f="nome" data-i="'+i+'" value="'+esc(x.nome||"")+
@@ -1761,7 +1782,70 @@ mcpbody.addEventListener("change",function(e){
   MCPJ.servers[i].ativo=e.target.checked;
   mcpSync();
 });
+/* ================= comandos permitidos (uso.permitidos) ================= */
+var usov=$("#usov"), usobody=$("#usobody"), usostat=$("#usostat");
+var USO_I=-1, USO_LIST=[];
+function abreUso(i){
+  var s=MCPJ.servers[i];
+  if(!s) return;
+  USO_I=i;
+  var u=s.uso||{};
+  USO_LIST=Array.isArray(u.permitidos)?u.permitidos.slice():[];
+  usostat.textContent=s.nome||"";
+  pintaUso();
+  usov.classList.add("open");
+}
+function pintaUso(){
+  if(!USO_LIST.length){
+    usobody.innerHTML='<div style="padding:14px 4px;opacity:.7;font-size:13px">'+
+      "nenhum — tudo fora da base pede confirmação</div>";
+    return;
+  }
+  usobody.innerHTML=USO_LIST.map(function(p,k){
+    return '<div class="mrow"><input class="f" data-uoi="'+k+'" value="'+
+      esc(p)+'" aria-label="comando permitido" style="flex:1">'+
+      '<button class="mini" data-uorm="'+k+'" title="remover">✕</button></div>';
+  }).join("");
+}
+function fechaUso(){
+  var s=MCPJ.servers[USO_I];
+  if(s){
+    if(!s.uso||typeof s.uso!=="object") s.uso={};
+    var limpa=USO_LIST.map(function(p){ return String(p); }).filter(
+      function(p){ return p.trim()!==""; });
+    if(limpa.length) s.uso.permitidos=limpa;
+    else delete s.uso.permitidos;
+    mcpSync();
+    mcpnote.innerHTML="permitidos atualizados — vale depois de <b>aplicar</b>";
+  }
+  USO_I=-1;
+  usov.classList.remove("open");
+}
+usobody.addEventListener("input",function(e){
+  var k=e.target.getAttribute&&e.target.getAttribute("data-uoi");
+  if(k===null||k===undefined) return;
+  USO_LIST[+k]=e.target.value;
+});
+usobody.addEventListener("click",function(e){
+  var r=e.target.getAttribute&&e.target.getAttribute("data-uorm");
+  if(r===null||r===undefined) return;
+  USO_LIST.splice(+r,1);
+  pintaUso();
+});
+$("#usoadd").addEventListener("click",function(){
+  USO_LIST.push("");
+  pintaUso();
+  var ins=usobody.querySelectorAll("input[data-uoi]");
+  if(ins.length) ins[ins.length-1].focus();
+});
+$("#usoclose").addEventListener("click",fechaUso);
+usov.addEventListener("click",function(e){ if(e.target===usov) fechaUso(); });
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&usov.classList.contains("open")) fechaUso();
+});
 mcpbody.addEventListener("click",function(e){
+  var u=e.target.getAttribute&&e.target.getAttribute("data-uso");
+  if(u!==null&&u!==undefined){ abreUso(+u); return; }   /* janela permitidos */
   var r=e.target.getAttribute&&e.target.getAttribute("data-rm");
   if(r===null||r===undefined) return;
   MCPJ.servers.splice(+r,1);

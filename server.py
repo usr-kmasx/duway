@@ -525,6 +525,11 @@ def _mcp_validar(text):
             return None, "%s: uso.base precisa ser texto" % nome
         if "pedir_fora" in uso and not isinstance(uso["pedir_fora"], bool):
             return None, "%s: uso.pedir_fora precisa ser true/false" % nome
+        if "permitidos" in uso and (
+            not isinstance(uso["permitidos"], list)
+            or any(not isinstance(p, str) for p in uso["permitidos"])
+        ):
+            return None, "%s: uso.permitidos precisa ser lista de texto" % nome
     return doc["servers"], None
 
 
@@ -863,6 +868,30 @@ def _mcp_caminhos_fora(spec, arguments):
     return achados
 
 
+def _mcp_comando(arguments):
+    """texto do comando citado nos argumentos (chave command, ou 1o texto)"""
+    if isinstance(arguments, dict):
+        c = arguments.get("command")
+        if isinstance(c, str):
+            return c
+        for v in arguments.values():
+            if isinstance(v, str):
+                return v
+    return ""
+
+
+def _mcp_permitido(spec, arguments):
+    """comando exato cadastrado em uso.permitidos passa sem pedir"""
+    uso = spec.get("uso") or {}
+    perms = uso.get("permitidos") or []
+    if not perms:
+        return False
+    cmd = _mcp_comando(arguments).strip()
+    if not cmd:
+        return False
+    return any(cmd == str(p).strip() for p in perms)
+
+
 def _mcp_boot():
     try:
         _mcp_semeia_padroes()
@@ -1155,8 +1184,10 @@ class Handler(BaseHTTPRequestHandler):
                               409)
 
         args = payload.get("arguments") or {}
-        # uso.pedir_fora: caminho fora da base so com confirmado:true
-        fora = _mcp_caminhos_fora(ref["spec"], args)
+        # uso.pedir_fora: caminho fora da base so com confirmado:true.
+        # uso.permitidos: comando exato cadastrado passa sem pedir.
+        fora = [] if _mcp_permitido(ref["spec"], args) \
+            else _mcp_caminhos_fora(ref["spec"], args)
         if fora and not payload.get("confirmado"):
             base = _mcp_uso_base(ref["spec"])
             return self._json({
